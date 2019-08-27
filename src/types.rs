@@ -1,17 +1,39 @@
 mod parser;
 
-use serde::Serialize;
-use std::{convert::TryFrom,
-          fmt};
+use serde::{Deserialize,
+            Serialize};
+use std::{fmt,
+          io};
 
-pub use crate::types::parser::ServerMessage;
-use crate::{constants::{CLIENT_VERSION,
-                        MESSAGE_TERMINATOR},
-            types::parser::parse_subject};
+use crate::constants;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum GnatError {
+    FailedToParse(String),
     InvalidSubject(String),
+    InvalidTerminator(Vec<u8>),
+    Io(io::Error),
+    NotEnoughData,
+}
+
+impl fmt::Display for GnatError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GnatError::FailedToParse(line) => write!(f, "failed to parse line '{}'", line),
+            GnatError::InvalidSubject(subject) => write!(f, "invalid subject '{}'", subject),
+            GnatError::InvalidTerminator(terminator) => {
+                write!(f, "invalid message terminator {:?}", terminator)
+            }
+            GnatError::Io(e) => write!(f, "{}", e),
+            GnatError::NotEnoughData => write!(f, "not enough data"),
+        }
+    }
+}
+
+impl std::error::Error for GnatError {}
+
+impl From<io::Error> for GnatError {
+    fn from(e: io::Error) -> GnatError { GnatError::Io(e) }
 }
 
 pub type GnatResult<T> = Result<T, GnatError>;
@@ -20,7 +42,46 @@ pub enum ConnectionState {
     Connected,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+/// https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#info  
+#[derive(Debug, Deserialize, PartialEq)]
+pub struct Info {
+    /// The unique identifier of the NATS server
+    pub server_id: String,
+    /// The version of the NATS server
+    pub version: String,
+    /// The version of golang the NATS server was built with
+    pub go: String,
+    /// The IP address used to start the NATS server, by default this will be 0.0.0.0 and can be
+    /// configured with -client_advertise host:port
+    pub host: String,
+    /// The port number the NATS server is configured to listen on
+    pub port: u16,
+    /// Maximum payload size, in bytes, that the server will accept from the client.
+    pub max_payload: u64,
+    /// An integer indicating the protocol version of the server. The server version 1.2.0 sets
+    /// this to 1 to indicate that it supports the "Echo" feature.
+    pub proto: i32,
+    /// An optional unsigned integer (64 bits) representing the internal client identifier in the
+    /// server. This can be used to filter client connections in monitoring, correlate with error
+    /// logs, etc...
+    pub client_id: Option<u64>,
+    #[serde(default)]
+    /// If this is set, then the client should try to authenticate upon connect.
+    pub auth_required: bool,
+    #[serde(default)]
+    /// If this is set, then the client must perform the TLS/1.2 handshake. Note, this used to be
+    /// ssl_required and has been updated along with the protocol from SSL to TLS.
+    pub tls_required: bool,
+    #[serde(default)]
+    /// If this is set, the client must provide a valid certificate during the TLS handshake.
+    pub tls_verify: bool,
+    #[serde(default)]
+    /// An optional list of server urls that a client can connect to.
+    pub connect_urls: Vec<String>,
+}
+
+/// https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#connect
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Connect {
     /// Turns on +OK protocol acknowledgements.
     verbose: bool,
@@ -54,14 +115,6 @@ pub struct Connect {
     echo: bool,
 }
 
-impl Connect {
-    pub fn as_message(&self) -> String {
-        format!("CONNECT {}{}",
-                serde_json::to_string(self).expect("to serialize Connect"),
-                MESSAGE_TERMINATOR)
-    }
-}
-
 impl Default for Connect {
     fn default() -> Self {
         Self { verbose:      false,
@@ -72,31 +125,36 @@ impl Default for Connect {
                pass:         None,
                name:         None,
                lang:         String::from("rust"),
-               version:      String::from(CLIENT_VERSION),
+               version:      String::from(constants::CLIENT_VERSION),
                protocol:     0,
                echo:         false, }
     }
+}
+
+/// https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#okerr
+#[derive(Debug, PartialEq)]
+pub enum ProtocolErr {
+    UnknownProtocolOperation,
+    AttemptedToConnectToRoutePort,
+    AuthorizationViolation,
+    AuthorizationTimeout,
+    InvalidClientProtocol,
+    MaximumControlLineExceeded,
+    ParserError,
+    SecureConnectionTlsRequired,
+    StaleConnection,
+    MaximumConnectionsExceeded,
+    SlowConsumer,
+    MaximumPayloadViolation,
+    InvalidSubject,
+    PermissionsViolationForSubscription(Subject),
+    PermissionsViolationForPublish(Subject),
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Subject {
     tokens:        Vec<String>,
     full_wildcard: bool,
-}
-
-impl Subject {
-    /// Create a new subject without verifying that all tokens are valid
-    fn new_unchecked(tokens: &Vec<&str>, full_wildcard: bool) -> Self {
-        let tokens = tokens.iter().map(|s| String::from(*s)).collect();
-        Self { tokens,
-               full_wildcard }
-    }
-}
-
-impl TryFrom<&str> for Subject {
-    type Error = GnatError;
-
-    fn try_from(input: &str) -> Result<Self, Self::Error> { parse_subject(input) }
 }
 
 impl fmt::Display for Subject {
@@ -109,13 +167,74 @@ impl fmt::Display for Subject {
     }
 }
 
-pub fn header_for_publish_message(subject: &Subject,
-                                  reply_to: &Option<&Subject>,
-                                  len: usize)
-                                  -> String {
-    if let Some(reply_to) = reply_to {
-        format!("PUB {} {} {}{}", subject, reply_to, len, MESSAGE_TERMINATOR)
-    } else {
-        format!("PUB {} {}{}", subject, len, MESSAGE_TERMINATOR)
+#[derive(Debug, PartialEq)]
+pub struct Msg {
+    pub subject:  Subject,
+    pub sid:      String,
+    pub reply_to: Option<Subject>,
+    pub payload:  Vec<u8>,
+}
+
+impl Msg {
+    pub fn new(subject: Subject, sid: String, reply_to: Option<Subject>, payload: Vec<u8>) -> Self {
+        Self { subject,
+               sid,
+               reply_to,
+               payload }
     }
+}
+
+/// Representation of all possible server control lines. A control line is the first line of a
+/// message.
+#[derive(Debug, PartialEq)]
+pub enum ServerControl {
+    Info(Info),
+    Msg {
+        subject:  Subject,
+        sid:      String,
+        reply_to: Option<Subject>,
+        len:      u64,
+    },
+    Ping,
+    Pong,
+    Ok,
+    Err(ProtocolErr),
+}
+
+/// Representation of all possible server messages. This is similar to `ServerControl` however it
+/// contains a full message type.
+#[derive(Debug, PartialEq)]
+pub enum ServerMessage {
+    Info(Info),
+    Msg(Msg),
+    Ping,
+    Pong,
+    Ok,
+    Err(ProtocolErr),
+}
+
+impl From<ServerControl> for ServerMessage {
+    fn from(control: ServerControl) -> Self {
+        match control {
+            ServerControl::Info(info) => ServerMessage::Info(info),
+            // We should never try to directly convert a `ServerControl::Msg` to
+            // `ServerMessage::Msg`. The reason is the `Msg` message has a payload and therefore
+            // requires further parsing.
+            ServerControl::Msg { .. } => unreachable!(),
+            ServerControl::Ping => ServerMessage::Ping,
+            ServerControl::Pong => ServerMessage::Pong,
+            ServerControl::Ok => ServerMessage::Ok,
+            ServerControl::Err(e) => ServerMessage::Err(e),
+        }
+    }
+}
+
+/// Representation of all possible client messages.
+pub enum ClientMessage {
+    Connect(Connect),
+    Pub(Msg),
+    Sub,
+    Unsub,
+    Ping,
+    Pong,
 }
