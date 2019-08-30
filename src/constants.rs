@@ -34,5 +34,5 @@ pub const SLOW_CONSUMER: &str = "Slow Consumer";
 pub const MAXIMUM_PAYLOAD_VIOLATION: &str = "Maximum Payload Violation";
 pub const INVALID_SUBJECT: &str = "Invalid Subject";
 pub const PERMISSIONS_VIOLATION_FOR_SUBSCRIPTION: &str =
-    "Permissions Violation for Subscription to ";
-pub const PERMISSIONS_VIOLATION_FOR_PUBLISH: &str = "Permissions Violation for Publish to ";
+    "Permissions Violation for Subscription to";
+pub const PERMISSIONS_VIOLATION_FOR_PUBLISH: &str = "Permissions Violation for Publish to";
