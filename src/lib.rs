@@ -23,9 +23,11 @@ pub use crate::types::{ClientState, Connect, Info, ProtocolError, RantsError};
 
 pub struct Client {
     address: SocketAddr,
-    state: ConnectionState,
     info: Info,
     connect: Connect,
+    state: ConnectionState,
+    state_sender: WatchSender<ClientState>,
+    state_receiver: WatchReceiver<ClientState>,
     ping_sender: WatchSender<()>,
     ping_receiver: WatchReceiver<()>,
     pong_sender: WatchSender<()>,
@@ -43,15 +45,19 @@ impl Client {
 
     pub fn with_connect(addr: &str, connect: Connect) -> Arc<Mutex<Self>> {
         let address = addr.parse::<SocketAddr>().expect("TODO");
+        let state = ConnectionState::Disconnected;
+        let (state_sender, state_receiver) = watch::channel((&state).into());
         let (ping_sender, ping_receiver) = watch::channel(());
         let (pong_sender, pong_receiver) = watch::channel(());
         let (ok_sender, ok_receiver) = watch::channel(());
         let (err_sender, err_receiver) = watch::channel(ProtocolError::UnknownProtocolOperation);
         Arc::new(Mutex::new(Self {
             address,
-            state: ConnectionState::Disconnected,
             info: Info::new(),
             connect,
+            state,
+            state_sender,
+            state_receiver,
             ping_sender,
             ping_receiver,
             pong_sender,
@@ -63,20 +69,24 @@ impl Client {
         }))
     }
 
-    pub fn get_state(&self) -> ClientState {
-        (&self.state).into()
+    pub fn state(&self) -> ClientState {
+        self.state_receiver.get_ref().clone()
     }
 
-    pub fn get_info(&self) -> &Info {
+    pub fn state_stream(&self) -> WatchReceiver<ClientState> {
+        self.state_receiver.clone()
+    }
+
+    pub fn info(&self) -> &Info {
         &self.info
     }
 
-    pub fn get_connect(&mut self) -> &mut Connect {
+    pub fn connect_mut(&mut self) -> &mut Connect {
         &mut self.connect
     }
 
     pub async fn send_connect(&mut self) -> RantsResult<()> {
-        if let ConnectionState::Connected(writer) = &mut self.state {
+        if let ConnectionState::Connected(_, writer) = &mut self.state {
             let message = format!(
                 "{} {}{}",
                 constants::CONNECT_OP_NAME,
@@ -93,13 +103,14 @@ impl Client {
     pub async fn connect(client_wrapper: Arc<Mutex<Self>>) {
         let mut client = client_wrapper.lock().await;
         // If we are already connected do not connect again
-        if client.get_state() != ClientState::Connected {
-            client.state = ConnectionState::Connecting;
+        if let ConnectionState::Connected(_, _) = client.state {
+            client.state_transition(ConnectionState::Connecting);
             // Continuously try and connect
             let sink_and_stream = loop {
                 match TcpStream::connect(&client.address).await {
                     Ok(sink_and_stream) => break sink_and_stream,
                     Err(e) => {
+                        client.state_transition(ConnectionState::Disconnected);
                         error!("Failed to reconnect, err: {}", e);
                     }
                 }
@@ -109,7 +120,8 @@ impl Client {
             // Store the writer half of the tcp stream and spawn the server messages handler with
             // the reader
             let (reader, writer) = sink_and_stream.split();
-            client.state = ConnectionState::Connected(writer);
+            let connected = ConnectionState::Connected(client.address.clone(), writer);
+            client.state_transition(connected);
             tokio::spawn(Self::type_erased_server_messages_handler(
                 Arc::clone(&client_wrapper),
                 reader,
@@ -122,7 +134,7 @@ impl Client {
     }
 
     pub async fn disconnect(&mut self) -> RantsResult<()> {
-        self.state = ConnectionState::Disconnecting;
+        self.state_transition(ConnectionState::Disconnecting);
         unimplemented!()
     }
 
@@ -147,7 +159,7 @@ impl Client {
         reply_to: Option<&Subject>,
         payload: &[u8],
     ) -> RantsResult<()> {
-        if let ConnectionState::Connected(writer) = &mut self.state {
+        if let ConnectionState::Connected(_, writer) = &mut self.state {
             let control_line = if let Some(reply_to) = reply_to {
                 format!(
                     "{} {} {} {}{}",
@@ -182,7 +194,7 @@ impl Client {
     }
 
     pub async fn ping(&mut self) -> RantsResult<()> {
-        if let ConnectionState::Connected(writer) = &mut self.state {
+        if let ConnectionState::Connected(_, writer) = &mut self.state {
             let message = format!(
                 "{}{}",
                 constants::PING_OP_NAME,
@@ -196,7 +208,7 @@ impl Client {
     }
 
     pub async fn pong(&mut self) -> RantsResult<()> {
-        if let ConnectionState::Connected(writer) = &mut self.state {
+        if let ConnectionState::Connected(_, writer) = &mut self.state {
             let message = format!(
                 "{}{}",
                 constants::PONG_OP_NAME,
@@ -209,7 +221,11 @@ impl Client {
         }
     }
 
-    pub async fn subscribe(&self) -> RantsResult<()> {
+    pub async fn watch_subscribe(&self) -> RantsResult<()> {
+        unimplemented!()
+    }
+
+    pub async fn channel_subscribe(&self) -> RantsResult<()> {
         unimplemented!()
     }
 
@@ -290,12 +306,12 @@ impl Client {
         }
         // If we make it here the tcp connection was somehow disconnected
         let mut client = client_wrapper.lock().await;
-        if client.get_state() == ClientState::Disconnecting {
+        if let ConnectionState::Disconnecting = client.state {
             // We intentionally disconnected
-            client.state = ConnectionState::Disconnected;
+            client.state_transition(ConnectionState::Disconnected);
         } else {
             // A network error occurred try to reconnect
-            client.state = ConnectionState::Disconnected;
+            client.state_transition(ConnectionState::Disconnected);
             Self::connect(Arc::clone(&client_wrapper)).await;
         }
     }
@@ -308,5 +324,12 @@ impl Client {
         reader: TcpStreamReadHalf,
     ) -> impl std::future::Future<Output = ()> + Send {
         Self::server_messages_handler(client_wrapper, reader)
+    }
+
+    fn state_transition(&mut self, state: ConnectionState) {
+        self.state = state;
+        if let Err(e) = self.state_sender.broadcast((&self.state).into()) {
+            error!("Failed to broadcast state transition, err: {}", e);
+        }
     }
 }

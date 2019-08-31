@@ -3,6 +3,7 @@ mod parser;
 mod tests;
 
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::{fmt, io};
 use tokio::net::tcp::split::TcpStreamWriteHalf;
 
@@ -53,19 +54,20 @@ impl From<io::Error> for RantsError {
 pub type RantsResult<T> = Result<T, RantsError>;
 
 pub enum ConnectionState {
-    // I would rather use an `Encoder` here that operates on a `ClientMessage` enum. Unfortunately,
-    // when I attempted this, it was painful to make the payload passed to publish be of type
-    // `&[u8]` instead of `Vec<u8>` without a clone. So for now, the writer operates at the tcp
-    // layer writing raw bytes while the reader uses a custom codec.
-    Connected(TcpStreamWriteHalf),
+    // I would rather use an `Encoder` (instead of the raw `TcpStreamWriteHalf`) that operates
+    // on a `ClientMessage` enum. Unfortunately, when I attempted this, it was painful to make the
+    // payload passed to publish be of type `&[u8]` instead of `Vec<u8>` without a clone. So for
+    // now, the writer operates at the tcp layer writing raw bytes while the reader uses a custom
+    // codec.
+    Connected(SocketAddr, TcpStreamWriteHalf),
     Connecting,
     Disconnected,
     Disconnecting,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum ClientState {
-    Connected,
+    Connected(SocketAddr),
     Connecting,
     Disconnected,
     Disconnecting,
@@ -74,7 +76,7 @@ pub enum ClientState {
 impl From<&ConnectionState> for ClientState {
     fn from(s: &ConnectionState) -> Self {
         match s {
-            ConnectionState::Connected(_) => ClientState::Connected,
+            ConnectionState::Connected(address, _) => ClientState::Connected(address.clone()),
             ConnectionState::Connecting => ClientState::Connecting,
             ConnectionState::Disconnected => ClientState::Disconnected,
             ConnectionState::Disconnecting => ClientState::Disconnecting,

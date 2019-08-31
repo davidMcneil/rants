@@ -23,7 +23,7 @@ mod tests {
                     let till = time::Instant::now() + time::Duration::from_millis(delay);
                     timer::delay(till).await;
                     let mut lock = client.lock().await;
-                    let connect = lock.get_connect();
+                    let connect = lock.connect_mut();
                     connect.verbose(!connect.is_verbose());
                     lock.send_connect().await.unwrap();
                     lock.publish_with_reply(&s, &s, message.as_bytes())
