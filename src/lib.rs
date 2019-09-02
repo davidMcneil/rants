@@ -5,21 +5,22 @@ mod tests;
 mod types;
 
 use futures::{lock::Mutex, stream::StreamExt};
-use log::error;
-use std::{net::SocketAddr, sync::Arc};
+use log::{error, info};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::{
     codec::FramedRead,
     io::AsyncWriteExt,
     net::tcp::{split::TcpStreamReadHalf, TcpStream},
+    sync::mpsc::{self, Receiver as MpscReceiver},
     sync::watch::{self, Receiver as WatchReceiver, Sender as WatchSender},
 };
 
 use crate::{
     codec::Codec,
-    types::{ConnectionState, RantsResult, ServerMessage, Subject},
+    types::{ConnectionState, RantsResult, ServerMessage, Sid, Subject, Subscription},
 };
 
-pub use crate::types::{ClientState, Connect, Info, ProtocolError, RantsError};
+pub use crate::types::{ClientControl, ClientState, Connect, Info, ProtocolError, RantsError};
 
 pub struct Client {
     address: SocketAddr,
@@ -36,13 +37,16 @@ pub struct Client {
     ok_receiver: WatchReceiver<()>,
     err_sender: WatchSender<ProtocolError>,
     err_receiver: WatchReceiver<ProtocolError>,
+    subscriptions: HashMap<Sid, Subscription>,
 }
 
 impl Client {
+    /// Create a new `Client` with a default [Connect](struct.Connect.html)
     pub fn new(addr: &str) -> Arc<Mutex<Self>> {
         Self::with_connect(addr, Connect::new())
     }
 
+    /// Create a new `Client` with the provided [Connect](struct.Connect.html)
     pub fn with_connect(addr: &str, connect: Connect) -> Arc<Mutex<Self>> {
         let address = addr.parse::<SocketAddr>().expect("TODO");
         let state = ConnectionState::Disconnected;
@@ -66,67 +70,72 @@ impl Client {
             ok_receiver,
             err_sender,
             err_receiver,
+            subscriptions: HashMap::new(),
         }))
     }
 
+    /// Get the current state of the `Client`
     pub fn state(&self) -> ClientState {
         self.state_receiver.get_ref().clone()
     }
 
+    /// Watch state transitions
     pub fn state_stream(&self) -> WatchReceiver<ClientState> {
         self.state_receiver.clone()
     }
 
+    /// Get a reference to the most recent [Info](struct.Connect.html) message from the server
     pub fn info(&self) -> &Info {
         &self.info
     }
 
+    /// Get a mutable reference to the [Connect](struct.Connect.html) message for this client
     pub fn connect_mut(&mut self) -> &mut Connect {
         &mut self.connect
     }
 
+    /// Send a connect message with using the current [Connect](struct.Connect.html)
     pub async fn send_connect(&mut self) -> RantsResult<()> {
         if let ConnectionState::Connected(_, writer) = &mut self.state {
-            let message = format!(
-                "{} {}{}",
-                constants::CONNECT_OP_NAME,
-                serde_json::to_string(&self.connect).expect("to serialize Connect"),
-                constants::MESSAGE_TERMINATOR
-            );
-            writer.write_all(message.as_bytes()).await?;
+            let line = ClientControl::Connect(&self.connect).to_line();
+            writer.write_all(line.as_bytes()).await?;
             Ok(())
         } else {
             Err(RantsError::NotConnected)
         }
     }
 
+    /// Continuously try and connect
     pub async fn connect(client_wrapper: Arc<Mutex<Self>>) {
         let mut client = client_wrapper.lock().await;
         // If we are already connected do not connect again
         if let ConnectionState::Connected(_, _) = client.state {
-            client.state_transition(ConnectionState::Connecting);
-            // Continuously try and connect
-            let sink_and_stream = loop {
-                match TcpStream::connect(&client.address).await {
-                    Ok(sink_and_stream) => break sink_and_stream,
-                    Err(e) => {
-                        client.state_transition(ConnectionState::Disconnected);
-                        error!("Failed to reconnect, err: {}", e);
-                    }
-                }
-                // TODO: delay, timeout, back off, circuit breaker
-            };
-
-            // Store the writer half of the tcp stream and spawn the server messages handler with
-            // the reader
-            let (reader, writer) = sink_and_stream.split();
-            let connected = ConnectionState::Connected(client.address.clone(), writer);
-            client.state_transition(connected);
-            tokio::spawn(Self::type_erased_server_messages_handler(
-                Arc::clone(&client_wrapper),
-                reader,
-            ));
+            return;
         }
+
+        client.state_transition(ConnectionState::Connecting);
+        // Continuously try and connect
+        let sink_and_stream = loop {
+            match TcpStream::connect(&client.address).await {
+                Ok(sink_and_stream) => break sink_and_stream,
+                Err(e) => {
+                    client.state_transition(ConnectionState::Disconnected);
+                    error!("Failed to reconnect, err: {}", e);
+                }
+            }
+            // TODO: delay, timeout, back off, circuit breaker
+        };
+
+        // Store the writer half of the tcp stream and spawn the server messages handler with
+        // the reader
+        let (reader, writer) = sink_and_stream.split();
+        let connected = ConnectionState::Connected(client.address.clone(), writer);
+        client.state_transition(connected);
+        // TODO: Try and reconnect subscriptions
+        tokio::spawn(Self::type_erased_server_messages_handler(
+            Arc::clone(&client_wrapper),
+            reader,
+        ));
 
         if let Err(e) = client.send_connect().await {
             error!("Failed to send connect message, err: {}", e);
@@ -160,25 +169,8 @@ impl Client {
         payload: &[u8],
     ) -> RantsResult<()> {
         if let ConnectionState::Connected(_, writer) = &mut self.state {
-            let control_line = if let Some(reply_to) = reply_to {
-                format!(
-                    "{} {} {} {}{}",
-                    constants::PUB_OP_NAME,
-                    subject,
-                    reply_to,
-                    payload.len(),
-                    constants::MESSAGE_TERMINATOR
-                )
-            } else {
-                format!(
-                    "{} {} {}{}",
-                    constants::PUB_OP_NAME,
-                    subject,
-                    payload.len(),
-                    constants::MESSAGE_TERMINATOR
-                )
-            };
-            writer.write_all(control_line.as_bytes()).await?;
+            let line = ClientControl::Pub(subject, reply_to, payload.len()).to_line();
+            writer.write_all(line.as_bytes()).await?;
             writer.write_all(payload).await?;
             writer
                 .write_all(constants::MESSAGE_TERMINATOR.as_bytes())
@@ -195,12 +187,8 @@ impl Client {
 
     pub async fn ping(&mut self) -> RantsResult<()> {
         if let ConnectionState::Connected(_, writer) = &mut self.state {
-            let message = format!(
-                "{}{}",
-                constants::PING_OP_NAME,
-                constants::MESSAGE_TERMINATOR
-            );
-            writer.write_all(message.as_bytes()).await?;
+            let line = ClientControl::Ping.to_line();
+            writer.write_all(line.as_bytes()).await?;
             Ok(())
         } else {
             Err(RantsError::NotConnected)
@@ -209,28 +197,74 @@ impl Client {
 
     pub async fn pong(&mut self) -> RantsResult<()> {
         if let ConnectionState::Connected(_, writer) = &mut self.state {
-            let message = format!(
-                "{}{}",
-                constants::PONG_OP_NAME,
-                constants::MESSAGE_TERMINATOR
-            );
-            writer.write_all(message.as_bytes()).await?;
+            let line = ClientControl::Pong.to_line();
+            writer.write_all(line.as_bytes()).await?;
             Ok(())
         } else {
             Err(RantsError::NotConnected)
         }
     }
 
-    pub async fn watch_subscribe(&self) -> RantsResult<()> {
-        unimplemented!()
+    pub async fn subscribe(
+        &mut self,
+        subject: &Subject,
+        buffer: usize,
+    ) -> RantsResult<MpscReceiver<Vec<u8>>> {
+        self.subscribe_optional_queue_group(subject, None, buffer)
+            .await
     }
 
-    pub async fn channel_subscribe(&self) -> RantsResult<()> {
-        unimplemented!()
+    pub async fn subscribe_with_queue_group(
+        &mut self,
+        subject: &Subject,
+        queue_group: &str,
+        buffer: usize,
+    ) -> RantsResult<MpscReceiver<Vec<u8>>> {
+        self.subscribe_optional_queue_group(subject, Some(queue_group), buffer)
+            .await
     }
 
-    pub async fn unsubscribe(&self) -> RantsResult<()> {
-        unimplemented!()
+    pub async fn subscribe_optional_queue_group(
+        &mut self,
+        subject: &Subject,
+        queue_group: Option<&str>,
+        buffer: usize,
+    ) -> RantsResult<MpscReceiver<Vec<u8>>> {
+        if let ConnectionState::Connected(_, writer) = &mut self.state {
+            let (sender, receiver) = mpsc::channel(buffer);
+            let subscription =
+                Subscription::new(subject.clone(), queue_group.map(String::from), sender);
+            let line = ClientControl::Sub(&subscription).to_line();
+            writer.write_all(line.as_bytes()).await?;
+            self.subscriptions.insert(subscription.sid, subscription);
+            Ok(receiver)
+        } else {
+            Err(RantsError::NotConnected)
+        }
+    }
+
+    pub async fn unsubscribe(&mut self, sid: Sid) -> RantsResult<()> {
+        self.unsubscribe_optional_max_msgs(sid, None).await
+    }
+
+    pub async fn unsubscribe_with_max_msgs(&mut self, sid: Sid, max_msgs: u64) -> RantsResult<()> {
+        self.unsubscribe_optional_max_msgs(sid, Some(max_msgs))
+            .await
+    }
+
+    pub async fn unsubscribe_optional_max_msgs(
+        &mut self,
+        sid: Sid,
+        max_msgs: Option<u64>,
+    ) -> RantsResult<()> {
+        if let ConnectionState::Connected(_, writer) = &mut self.state {
+            let line = ClientControl::Unsub(sid, max_msgs).to_line();
+            writer.write_all(line.as_bytes()).await?;
+            self.subscriptions.remove(&sid);
+            Ok(())
+        } else {
+            Err(RantsError::NotConnected)
+        }
     }
 
     pub fn ping_stream(&mut self) -> WatchReceiver<()> {
@@ -264,7 +298,53 @@ impl Client {
                 ServerMessage::Info(info) => {
                     client_wrapper.lock().await.info = info;
                 }
-                ServerMessage::Msg(msg) => println!("{:?}", msg),
+                ServerMessage::Msg(msg) => {
+                    let sid_str = msg.sid;
+                    let sid_result = sid_str.parse::<Sid>();
+                    if sid_result.is_err() {
+                        // This should not happen as the only sid this client uses is of type `Sid`
+                        error!("Received unknown sid '{}'", sid_str);
+                        continue;
+                    }
+                    let sid = sid_result.expect("u64 sid");
+                    let mut client = client_wrapper.lock().await;
+                    let maybe_subscription = client.subscriptions.get_mut(&sid);
+                    // If we do not know about this subscription, log an error and unsubscribe.
+                    // This should not happen unless our subscription store got out of sync.
+                    if maybe_subscription.is_none() {
+                        error!("Received unknown sid '{}'", sid_str);
+                        let client_wrapper = Arc::clone(&client_wrapper);
+                        tokio::spawn(async move {
+                            info!("Unsubscribing from unknown sid '{}'", sid_str);
+                            let mut client = client_wrapper.lock().await;
+                            if let Err(e) = client.unsubscribe(sid).await {
+                                error!("Failed to unsubscribe from '{}', err: {}", sid, e);
+                            }
+                        });
+                        continue;
+                    }
+                    let subscription = maybe_subscription.expect("subscription");
+                    // Try and send the message
+                    if let Err(e) = subscription.sender.try_send(msg.payload) {
+                        // If we could not send because the receiver is closed, we no longer
+                        // care about this subscription and should unsubscribe
+                        if e.is_closed() {
+                            let client_wrapper = Arc::clone(&client_wrapper);
+                            tokio::spawn(async move {
+                                info!("Unsubscribing from closed sid '{}'", sid_str);
+                                let mut client = client_wrapper.lock().await;
+                                if let Err(e) = client.unsubscribe(sid).await {
+                                    error!("Failed to unsubscribe from '{}', err: {}", sid, e);
+                                }
+                            });
+                        } else {
+                            error!(
+                                "Failed to send msg with sid '{}' and subject '{}', err: {}",
+                                sid, msg.subject, e
+                            );
+                        }
+                    }
+                }
                 ServerMessage::Ping => {
                     if let Err(e) = client_wrapper.lock().await.ping_sender.broadcast(()) {
                         error!(
@@ -304,7 +384,7 @@ impl Client {
                 }
             }
         }
-        // If we make it here the tcp connection was somehow disconnected
+        // If we make it here, the tcp connection was somehow disconnected
         let mut client = client_wrapper.lock().await;
         if let ConnectionState::Disconnecting = client.state {
             // We intentionally disconnected

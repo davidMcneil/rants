@@ -2,6 +2,7 @@
 mod tests;
 
 use bytes::{BufMut, BytesMut};
+use log::trace;
 use std::{io, mem, str, usize};
 use tokio::codec::Decoder;
 
@@ -48,8 +49,8 @@ impl Codec {
                 if buf.len() < len + MESSAGE_TERMINATOR.len() {
                     return Err(RantsError::NotEnoughData);
                 }
-                let line = buf.split_to(len + MESSAGE_TERMINATOR.len() + 1);
-                let terminator = &line[len..];
+                let line = buf.split_to(len + MESSAGE_TERMINATOR.len());
+                let terminator = &line[len..len + MESSAGE_TERMINATOR.len()];
                 let payload = &line[..len];
                 // Check that the payload is correctly terminated
                 if terminator != MESSAGE_TERMINATOR.as_bytes() {
@@ -89,6 +90,7 @@ impl Codec {
                     let line = utf8(&line)?;
                     // Parse the control line
                     let control_line = line.parse()?;
+                    trace!("<<- {:?}", line);
                     if let ServerControl::Msg {
                         subject,
                         sid,

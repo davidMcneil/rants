@@ -4,6 +4,7 @@
         "Unsub",
         "combinator",
         "combinators",
+        "msgs",
         "proto"
     ]
 }

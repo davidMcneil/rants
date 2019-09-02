@@ -2,10 +2,14 @@ mod parser;
 #[cfg(test)]
 mod tests;
 
+use log::trace;
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
-use std::{fmt, io};
-use tokio::net::tcp::split::TcpStreamWriteHalf;
+use std::{
+    fmt, io,
+    net::SocketAddr,
+    sync::atomic::{AtomicU64, Ordering},
+};
+use tokio::{net::tcp::split::TcpStreamWriteHalf, sync::mpsc::Sender as MpscSender};
 
 use crate::constants;
 
@@ -31,8 +35,8 @@ pub enum RantsError {
 impl fmt::Display for RantsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RantsError::FailedToParse(line) => write!(f, "failed to parse line '{}'", line),
-            RantsError::InvalidSubject(subject) => write!(f, "invalid subject '{}'", subject),
+            RantsError::FailedToParse(line) => write!(f, "failed to parse line {:?}", line),
+            RantsError::InvalidSubject(subject) => write!(f, "invalid subject {:?}", subject),
             RantsError::InvalidTerminator(terminator) => {
                 write!(f, "invalid message terminator {:?}", terminator)
             }
@@ -55,7 +59,7 @@ pub type RantsResult<T> = Result<T, RantsError>;
 
 pub enum ConnectionState {
     // I would rather use an `Encoder` (instead of the raw `TcpStreamWriteHalf`) that operates
-    // on a `ClientMessage` enum. Unfortunately, when I attempted this, it was painful to make the
+    // on a `ClientControl` enum. Unfortunately, when I attempted this, it was painful to make the
     // payload passed to publish be of type `&[u8]` instead of `Vec<u8>` without a clone. So for
     // now, the writer operates at the tcp layer writing raw bytes while the reader uses a custom
     // codec.
@@ -452,6 +456,28 @@ impl Msg {
     }
 }
 
+// A subscription id can really be any alphanumeric string but within this library we only use u64s
+pub type Sid = u64;
+static SID: AtomicU64 = AtomicU64::new(0);
+
+pub struct Subscription {
+    pub(crate) subject: Subject,
+    pub(crate) sid: Sid,
+    pub(crate) queue_group: Option<String>,
+    pub(crate) sender: MpscSender<Vec<u8>>,
+}
+
+impl Subscription {
+    pub fn new(subject: Subject, queue_group: Option<String>, sender: MpscSender<Vec<u8>>) -> Self {
+        Self {
+            subject,
+            sid: SID.fetch_add(1, Ordering::Relaxed),
+            queue_group,
+            sender,
+        }
+    }
+}
+
 /// Representation of all possible server control lines. A control line is the first line of a
 /// message.
 #[derive(Debug, PartialEq)]
@@ -494,5 +520,112 @@ impl From<ServerControl> for ServerMessage {
             ServerControl::Ok => ServerMessage::Ok,
             ServerControl::Err(e) => ServerMessage::Err(e),
         }
+    }
+}
+
+pub enum ClientControl<'a> {
+    Connect(&'a Connect),
+    Pub(&'a Subject, Option<&'a Subject>, usize),
+    Sub(&'a Subscription),
+    Unsub(Sid, Option<u64>),
+    Ping,
+    Pong,
+}
+
+impl fmt::Display for ClientControl<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Connect(connect) => write!(
+                f,
+                "{} {}{}",
+                constants::CONNECT_OP_NAME,
+                serde_json::to_string(connect).expect("to serialize Connect"),
+                constants::MESSAGE_TERMINATOR
+            ),
+            Self::Pub(subject, reply_to, len) => {
+                if let Some(reply_to) = reply_to {
+                    write!(
+                        f,
+                        "{} {} {} {}{}",
+                        constants::PUB_OP_NAME,
+                        subject,
+                        reply_to,
+                        len,
+                        constants::MESSAGE_TERMINATOR
+                    )
+                } else {
+                    write!(
+                        f,
+                        "{} {} {}{}",
+                        constants::PUB_OP_NAME,
+                        subject,
+                        len,
+                        constants::MESSAGE_TERMINATOR
+                    )
+                }
+            }
+            Self::Sub(subscription) => {
+                if let Some(queue_group) = &subscription.queue_group {
+                    write!(
+                        f,
+                        "{} {} {} {}{}",
+                        constants::SUB_OP_NAME,
+                        subscription.subject,
+                        queue_group,
+                        subscription.sid,
+                        constants::MESSAGE_TERMINATOR
+                    )
+                } else {
+                    write!(
+                        f,
+                        "{} {} {}{}",
+                        constants::SUB_OP_NAME,
+                        subscription.subject,
+                        subscription.sid,
+                        constants::MESSAGE_TERMINATOR
+                    )
+                }
+            }
+            Self::Unsub(sid, max_msgs) => {
+                if let Some(max_msgs) = max_msgs {
+                    write!(
+                        f,
+                        "{} {} {}{}",
+                        constants::UNSUB_OP_NAME,
+                        sid,
+                        max_msgs,
+                        constants::MESSAGE_TERMINATOR
+                    )
+                } else {
+                    write!(
+                        f,
+                        "{} {}{}",
+                        constants::UNSUB_OP_NAME,
+                        sid,
+                        constants::MESSAGE_TERMINATOR
+                    )
+                }
+            }
+            Self::Ping => write!(
+                f,
+                "{}{}",
+                constants::PING_OP_NAME,
+                constants::MESSAGE_TERMINATOR
+            ),
+            Self::Pong => write!(
+                f,
+                "{}{}",
+                constants::PONG_OP_NAME,
+                constants::MESSAGE_TERMINATOR
+            ),
+        }
+    }
+}
+
+impl ClientControl<'_> {
+    pub fn to_line(&self) -> String {
+        let s = self.to_string();
+        trace!("->> {:?}", s);
+        s
     }
 }

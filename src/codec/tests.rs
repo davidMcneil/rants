@@ -93,6 +93,8 @@ fn unit_decoder_msg() {
     );
     assert!(codec.decode(buf).unwrap().is_none());
     buf.put("orld!\r\n");
+    buf.put("msg test 0 5\r\nshort\r\n");
+    buf.put("msg test 0 0\r\n\r\n");
     assert_eq!(
         codec.decode(buf).unwrap().unwrap().unwrap(),
         ServerMessage::Msg(Msg::new(
@@ -100,6 +102,24 @@ fn unit_decoder_msg() {
             String::from("0"),
             None,
             b"hello world!".to_vec()
+        ))
+    );
+    assert_eq!(
+        codec.decode(buf).unwrap().unwrap().unwrap(),
+        ServerMessage::Msg(Msg::new(
+            Subject::from_str("test").unwrap(),
+            String::from("0"),
+            None,
+            b"short".to_vec()
+        ))
+    );
+    assert_eq!(
+        codec.decode(buf).unwrap().unwrap().unwrap(),
+        ServerMessage::Msg(Msg::new(
+            Subject::from_str("test").unwrap(),
+            String::from("0"),
+            None,
+            b"".to_vec()
         ))
     );
 
