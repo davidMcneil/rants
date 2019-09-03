@@ -77,6 +77,36 @@ pub enum ClientState {
     Disconnecting,
 }
 
+impl ClientState {
+    pub fn is_connected(&self) -> bool {
+        if let Self::Connected(_) = self {
+            return true;
+        }
+        false
+    }
+
+    pub fn is_connecting(&self) -> bool {
+        if let Self::Connecting = self {
+            return true;
+        }
+        false
+    }
+
+    pub fn is_disconnected(&self) -> bool {
+        if let Self::Disconnected = self {
+            return true;
+        }
+        false
+    }
+
+    pub fn is_disconnecting(&self) -> bool {
+        if let Self::Disconnecting = self {
+            return true;
+        }
+        false
+    }
+}
+
 impl From<&ConnectionState> for ClientState {
     fn from(s: &ConnectionState) -> Self {
         match s {
@@ -464,16 +494,16 @@ pub struct Subscription {
     pub(crate) subject: Subject,
     pub(crate) sid: Sid,
     pub(crate) queue_group: Option<String>,
-    pub(crate) sender: MpscSender<Vec<u8>>,
+    pub(crate) tx: MpscSender<Vec<u8>>,
 }
 
 impl Subscription {
-    pub fn new(subject: Subject, queue_group: Option<String>, sender: MpscSender<Vec<u8>>) -> Self {
+    pub fn new(subject: Subject, queue_group: Option<String>, tx: MpscSender<Vec<u8>>) -> Self {
         Self {
             subject,
             sid: SID.fetch_add(1, Ordering::Relaxed),
             queue_group,
-            sender,
+            tx,
         }
     }
 }
