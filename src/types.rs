@@ -1,147 +1,23 @@
+mod error;
 mod parser;
+mod state;
 #[cfg(test)]
 mod tests;
 
 use log::trace;
 use serde::{Deserialize, Serialize};
 use std::{
-    fmt, io,
-    net::SocketAddr,
+    fmt,
     sync::atomic::{AtomicU64, Ordering},
 };
-use tokio::{net::tcp::split::TcpStreamWriteHalf, sync::mpsc::Sender as MpscSender};
+use tokio::sync::mpsc::Sender as MpscSender;
 
 use crate::constants;
 
-#[derive(Debug)]
-pub enum RantsError {
-    FailedToParse(String),
-    InvalidSubject(String),
-    InvalidTerminator(Vec<u8>),
-    Io(io::Error),
-    NotConnected,
-    NotEnoughData,
-}
+pub use self::error::{RantsError, RantsResult};
+pub use self::state::{ClientState, ConnectionState, StateTransition, StateTransitionResult};
 
-impl fmt::Display for RantsError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RantsError::FailedToParse(line) => write!(f, "failed to parse line {:?}", line),
-            RantsError::InvalidSubject(subject) => write!(f, "invalid subject {:?}", subject),
-            RantsError::InvalidTerminator(terminator) => {
-                write!(f, "invalid message terminator {:?}", terminator)
-            }
-            RantsError::Io(e) => write!(f, "{}", e),
-            RantsError::NotConnected => write!(f, "not connected"),
-            RantsError::NotEnoughData => write!(f, "not enough data"),
-        }
-    }
-}
-
-impl std::error::Error for RantsError {}
-
-impl From<io::Error> for RantsError {
-    fn from(e: io::Error) -> Self {
-        RantsError::Io(e)
-    }
-}
-
-pub type RantsResult<T> = Result<T, RantsError>;
-
-// Internal state representation. Identical to `ClientState` but tracks internal implementation
-// details such as `TcpStreamWriteHalf`.
-//
-// I would rather use an `Encoder` (instead of the raw `TcpStreamWriteHalf`) that operates
-// on a `ClientControl` enum. Unfortunately, when I attempted this, it was painful to make the
-// payload passed to publish be of type `&[u8]` instead of `Vec<u8>` without a clone. So for
-// now, the writer operates at the tcp layer writing raw bytes while the reader uses a custom
-// codec.
-pub enum ConnectionState {
-    Connected(SocketAddr, TcpStreamWriteHalf),
-    Connecting(SocketAddr),
-    Disconnected,
-    // If we are coming from a connected state, we have a `TcpStreamWriteHalf` to close
-    Disconnecting(Option<TcpStreamWriteHalf>),
-}
-
-#[derive(Debug)]
-pub enum StateTransition {
-    ToConnecting(SocketAddr),
-    ToConnected(TcpStreamWriteHalf),
-    ToDisconnecting,
-    ToDisconnected,
-}
-
-// Used to return data from a state transition
-pub enum StateTransitionResult {
-    None,
-    Writer(TcpStreamWriteHalf),
-}
-
-/// Possible client states.
-///
-/// ```text
-///                                              Client State Diagram
-///         +-------------------------------+--------------------------------------------------------------+
-///         |                               |                                                              |
-///         V                               |                                                              v
-/// +-------+--------+             +--------+-------+            +----------------+               +--------+-------+
-/// |                |             |                |            |                |               |                |
-/// |  Disconnected  +------------>+   Connecting   +----------->+   Connected    +-------------->+ Disconnecting  |
-/// |                |             |                |            |                |               |                |
-/// +-------+--------+             +----------------+            +--------+-------+               +--------+-------+
-///         ^                                                             |                                |
-///         |                                                             |                                |
-///         +-------------------------------------------------------------+--------------------------------+
-/// ```
-#[derive(Clone, Debug)]
-pub enum ClientState {
-    Connected(SocketAddr),
-    Connecting(SocketAddr),
-    Disconnected,
-    Disconnecting,
-}
-
-impl ClientState {
-    pub fn is_connected(&self) -> bool {
-        if let Self::Connected(_) = self {
-            return true;
-        }
-        false
-    }
-
-    pub fn is_connecting(&self) -> bool {
-        if let Self::Connecting(_) = self {
-            return true;
-        }
-        false
-    }
-
-    pub fn is_disconnected(&self) -> bool {
-        if let Self::Disconnected = self {
-            return true;
-        }
-        false
-    }
-
-    pub fn is_disconnecting(&self) -> bool {
-        if let Self::Disconnecting = self {
-            return true;
-        }
-        false
-    }
-}
-
-impl From<&ConnectionState> for ClientState {
-    fn from(s: &ConnectionState) -> Self {
-        match s {
-            ConnectionState::Connected(address, _) => ClientState::Connected(address.clone()),
-            ConnectionState::Connecting(address) => ClientState::Connecting(address.clone()),
-            ConnectionState::Disconnected => ClientState::Disconnected,
-            ConnectionState::Disconnecting(_) => ClientState::Disconnecting,
-        }
-    }
-}
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// As soon as the server accepts a connection from the client, it will send information about
 /// itself and the configuration and security requirements that are necessary for the client to
@@ -245,6 +121,8 @@ impl Info {
         &self.connect_urls
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug, PartialEq, Serialize)]
 #[serde(untagged)]
@@ -405,6 +283,8 @@ impl Default for Connect {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
 /// https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#okerr
 #[derive(Debug, PartialEq)]
 pub enum ProtocolError {
@@ -476,6 +356,8 @@ impl fmt::Display for ProtocolError {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Subject {
     tokens: Vec<String>,
@@ -491,6 +373,8 @@ impl fmt::Display for Subject {
         Ok(())
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug, PartialEq)]
 pub struct Msg {
@@ -510,6 +394,8 @@ impl Msg {
         }
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // A subscription id can really be any alphanumeric string but within this library we only use u64s
 pub type Sid = u64;
@@ -532,6 +418,8 @@ impl Subscription {
         }
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// Representation of all possible server control lines. A control line is the first line of a
 /// message.
@@ -577,6 +465,8 @@ impl From<ServerControl> for ServerMessage {
         }
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 pub enum ClientControl<'a> {
     Connect(&'a Connect),
