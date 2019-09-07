@@ -13,7 +13,6 @@ use tokio::{runtime::current_thread::Runtime, timer};
 //         .default_format_module_path(false)
 //         .filter_level(LevelFilter::Trace)
 //         .filter(Some("hyper"), LevelFilter::Warn)
-//         .filter(Some("reqwest"), LevelFilter::Warn)
 //         .filter(Some("tokio_reactor"), LevelFilter::Warn)
 //         .init();
 

@@ -8,7 +8,7 @@ use tokio::codec::Decoder;
 
 use crate::{
     constants::MESSAGE_TERMINATOR,
-    types::{Msg, Never, RantsError, RantsResult, ServerControl, ServerMessage, Subject},
+    types::{Msg, RantsError, RantsResult, ServerControl, ServerMessage, Subject},
 };
 
 enum State {
@@ -131,7 +131,7 @@ fn utf8(buf: &[u8]) -> Result<&str, io::Error> {
 }
 
 impl Decoder for Codec {
-    type Error = Never;
+    type Error = io::Error;
     type Item = RantsResult<ServerMessage>;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {

@@ -11,7 +11,7 @@ use futures::{
 };
 use log::{error, info};
 use pin_utils::pin_mut;
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, io::ErrorKind, mem, net::Shutdown, net::SocketAddr, sync::Arc};
 use tokio::{
     codec::FramedRead,
     io::AsyncWriteExt,
@@ -25,7 +25,8 @@ use crate::{
     codec::Codec,
     types::{
         ClientControl, ClientState, Connect, ConnectionState, Info, ProtocolError, RantsError,
-        RantsResult, ServerMessage, Sid, Subject, Subscription,
+        RantsResult, ServerMessage, Sid, StateTransition, StateTransitionResult, Subject,
+        Subscription,
     },
 };
 
@@ -124,13 +125,14 @@ impl Client {
 
         // Continuously try and connect
         let sink_and_stream = loop {
-            client.state_transition(ConnectionState::Connecting);
-            // TODO: try all possible addresses
+            let address = client.address.clone();
+            client.state_transition(StateTransition::ToConnecting(address));
+            // TODO: try all possible address
             // TODO: handle disconnect while trying to connect
             match TcpStream::connect(&client.address).await {
                 Ok(sink_and_stream) => break sink_and_stream,
                 Err(e) => {
-                    client.state_transition(ConnectionState::Disconnected);
+                    client.state_transition(StateTransition::ToDisconnected);
                     error!("Failed to reconnect, err: {}", e);
                 }
             }
@@ -140,9 +142,8 @@ impl Client {
         // Store the writer half of the tcp stream and spawn the server messages handler with
         // the reader
         let (reader, writer) = sink_and_stream.split();
-        let connected = ConnectionState::Connected(client.address.clone(), writer);
         // TODO: only transition after successfully sending connect and receiving info
-        client.state_transition(connected);
+        client.state_transition(StateTransition::ToConnected(writer));
         // TODO: reconnect subscriptions
         tokio::spawn(Self::type_erased_server_messages_handler(
             Arc::clone(&wrapped_client),
@@ -173,7 +174,7 @@ impl Client {
             });
             // Transition to the disconnecting state. This will complete the disconnecting future
             // breaking out of any continuos loops.
-            client.state_transition(ConnectionState::Disconnecting);
+            client.state_transition(StateTransition::ToDisconnecting);
         }
         // Wait till we are disconnected
         rx.await.expect("to receive disconnect signal");
@@ -217,7 +218,7 @@ impl Client {
     }
 
     /// TODO: comments
-    pub async fn request_reply(&self) -> RantsResult<Vec<u8>> {
+    pub async fn request(&self, subject: &Subject, payload: &[u8]) -> RantsResult<Vec<u8>> {
         unimplemented!()
     }
 
@@ -349,9 +350,10 @@ impl Client {
         loop {
             // Select between the next message and disconnecting
             let either = future::select(reader.next(), disconnecting).await;
-            let message = match either {
-                Either::Left((Some(message), d)) => {
-                    disconnecting = d;
+            let message_result = match either {
+                Either::Left((Some(message), unresolved_disconnecting)) => {
+                    // Set disconnecting to be the still unresolved disconnecting future
+                    disconnecting = unresolved_disconnecting;
                     message
                 }
                 Either::Left((None, _)) => {
@@ -361,15 +363,16 @@ impl Client {
                 Either::Right(((), _)) => break,
             };
 
-            // The codec never returns an error
-            let message = message.expect("never codec error");
-
             // Check that we did not receive an invalid message
-            let message = match message {
-                Ok(message) => message,
-                Err(e) => {
+            let message = match message_result {
+                Ok(Ok(message)) => message,
+                Ok(Err(e)) => {
                     error!("Received invalid server message, err: {}", e);
                     continue;
+                }
+                Err(e) => {
+                    error!("TCP socket error, err: {}", e);
+                    break;
                 }
             };
             // Handle the different types of messages we could receive
@@ -471,15 +474,31 @@ impl Client {
                 }
             }
         }
-        // TODO: combine the reader and writer and disconnect
         // Handle a disconnect
         let mut client = wrapped_client.lock().await;
-        if let ConnectionState::Disconnecting = client.state {
-            // We intentionally disconnected
-            client.state_transition(ConnectionState::Disconnected);
+        // If we are not in the disconnecting state, we accidentally disconnected and should try to
+        // reconnect.
+        let should_reconnect = !client.state().is_disconnecting();
+        // Try and shutdown the TCP connection
+        if let StateTransitionResult::Writer(writer) =
+            client.state_transition(StateTransition::ToDisconnected)
+        {
+            match reader.into_inner().reunite(writer) {
+                Ok(tcp) => {
+                    if let Err(e) = tcp.shutdown(Shutdown::Both) {
+                        if e.kind() != ErrorKind::NotConnected {
+                            error!("Failed to shutdown TCP stream, err: {}", e);
+                        }
+                    }
+                }
+                Err(e) => error!("Failed to reunite TCP stream, err: {}", e),
+            }
         } else {
-            // A network error occurred try to reconnect
-            client.state_transition(ConnectionState::Disconnected);
+            // We should always have a writer to close
+            error!("Disconnected with no TCP writer. Unable to shutdown TCP stream.");
+            debug_assert!(false);
+        }
+        if should_reconnect {
             tokio::spawn(Self::connect(Arc::clone(&wrapped_client)));
         }
     }
@@ -497,7 +516,7 @@ impl Client {
     // Create a future that waits for the disconnecting state. We can only transition to
     // disconnecting from the connecting or connected states.
     async fn disconnecting(state_stream: &mut WatchReceiver<ClientState>) {
-        // Immediatly remove the current state from the watch stream.
+        // Immediately remove the current state from the watch stream.
         let state = state_stream.next().await;
         debug_assert!({
             let state = state.unwrap();
@@ -508,14 +527,67 @@ impl Client {
         debug_assert!(state.unwrap().is_disconnecting());
     }
 
-    fn state_transition(&mut self, state: ConnectionState) {
-        self.state = state;
-        let client_state = (&self.state).into();
-        info!("Transitioned to state '{:?}'", client_state);
-        // If we can not broadcast the state transition, we would end up in an inconsistent
+    fn state_transition(&mut self, transition: StateTransition) -> StateTransitionResult {
+        let previous_client_state = ClientState::from(&self.state);
+        // Temporarily set to the disconnected state so we can move values out of `previous_state`
+        let previous_state = mem::replace(&mut self.state, ConnectionState::Disconnected);
+        let (next_state, result) = match (previous_state, transition) {
+            (ConnectionState::Disconnected, StateTransition::ToConnecting(address)) => (
+                ConnectionState::Connecting(address),
+                StateTransitionResult::None,
+            ),
+            (ConnectionState::Connecting(address), StateTransition::ToConnected(writer)) => (
+                ConnectionState::Connected(address, writer),
+                StateTransitionResult::None,
+            ),
+            (ConnectionState::Connected(_, writer), StateTransition::ToDisconnecting) => (
+                ConnectionState::Disconnecting(Some(writer)),
+                StateTransitionResult::None,
+            ),
+            (ConnectionState::Connected(_, writer), StateTransition::ToDisconnected) => (
+                ConnectionState::Disconnected,
+                StateTransitionResult::Writer(writer),
+            ),
+            (ConnectionState::Connecting(_), StateTransition::ToDisconnected) => {
+                (ConnectionState::Disconnected, StateTransitionResult::None)
+            }
+            (ConnectionState::Connecting(_), StateTransition::ToDisconnecting) => (
+                ConnectionState::Disconnecting(None),
+                StateTransitionResult::None,
+            ),
+            (ConnectionState::Disconnecting(Some(writer)), StateTransition::ToDisconnected) => (
+                ConnectionState::Disconnected,
+                StateTransitionResult::Writer(writer),
+            ),
+            (ConnectionState::Disconnecting(None), StateTransition::ToDisconnected) => {
+                (ConnectionState::Disconnected, StateTransitionResult::None)
+            }
+            (_, transition) => {
+                // Other state transitions are not allowed
+                error!(
+                    "Invalid transition '{:?}' from '{:?}'",
+                    transition, previous_client_state,
+                );
+                unreachable!();
+            }
+        };
+        self.state = next_state;
+        let next_client_state = ClientState::from(&self.state);
+        info!(
+            "Transitioned to state '{:?}' from '{:?}'",
+            next_client_state, previous_client_state
+        );
+        // If we can not broadcast the state transition, we could end up in an inconsistent
         // state. This would be very bad so instead panic. This should never happen.
         self.state_tx
-            .broadcast(client_state)
+            .broadcast(next_client_state)
             .expect("to broadcast state transition");
+        result
+    }
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        // TODO: Disconnect on drop
     }
 }
