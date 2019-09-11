@@ -1,6 +1,7 @@
+use std::str::FromStr;
+
 use super::*;
 use crate::{constants::*, types::*};
-use std::str::FromStr;
 
 #[test]
 fn unit_decoder_simple() {

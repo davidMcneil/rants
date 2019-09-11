@@ -1,9 +1,10 @@
-use super::*;
 use env_logger::Builder as LogBuilder;
 use log::LevelFilter;
 use rand::Rng;
 use std::time;
 use tokio::{runtime::current_thread::Runtime, timer};
+
+use super::*;
 
 // #[test]
 // #[ignore]
@@ -56,22 +57,25 @@ use tokio::{runtime::current_thread::Runtime, timer};
 
 #[test]
 fn integration_echo() {
-    // LogBuilder::new()
-    //     .filter_level(LevelFilter::Trace)
-    //     .filter(Some("mio"), LevelFilter::Warn)
-    //     .filter(Some("tokio"), LevelFilter::Warn)
-    //     .init();
+    LogBuilder::new()
+        .filter_level(LevelFilter::Trace)
+        .filter(Some("mio"), LevelFilter::Warn)
+        .filter(Some("tokio"), LevelFilter::Warn)
+        .init();
 
     let f = async {
         let mut rng = rand::thread_rng();
-        let total = 100;
-        let wrapped_client = Client::new("0.0.0.0:4222");
+        let total = 1000;
+        let wrapped_client = Client::new(vec![
+            "172.217.9.78:4222".parse().unwrap(),
+            "172.217.9.78".parse().unwrap(),
+        ]);
         {
             let mut client = wrapped_client.lock().await;
             client.connect_mut().echo(true);
         }
         Client::connect(Arc::clone(&wrapped_client)).await;
-        let mut subscription = {
+        let (_, mut subscription) = {
             let subject = "test".parse().unwrap();
             let mut client = wrapped_client.lock().await;
             client.subscribe(&subject, 1024).await.unwrap()
@@ -112,21 +116,32 @@ fn integration_echo() {
 // #[test]
 // fn integration_watch() {
 //     use futures::sink::SinkExt;
+//     use tokio::prelude::*;
 //     use tokio::sync::watch;
 //     let f = async {
 //         let (mut tx, mut rx) = watch::channel(-1);
-//         tokio::spawn(async move {
-//             for i in 0..10i32 {
-//                 let till = time::Instant::now() + time::Duration::from_secs(1);
-//                 timer::delay(till).await;
-//                 tx.send(i).await.unwrap();
-//             }
-//         });
-//         let till = time::Instant::now() + time::Duration::from_secs(12);
-//         timer::delay(till).await;
-//         while let Some(n) = rx.recv().await {
-//             println!("got {}", n);
-//         }
+//         println!("1 {:?}", rx.next().now_or_never());
+//         // tokio::spawn(async move {
+//         //     for i in 0..10i32 {
+//         //         let till = time::Instant::now() + time::Duration::from_secs(5);
+//         //         timer::delay(till).await;
+//         //         tx.send(i).await.unwrap();
+//         //     }
+//         // });
+//         // let till = time::Instant::now() + time::Duration::from_secs(12);
+//         // timer::delay(till).await;
+//         // tx.send(5).await.unwrap();
+//         println!("2 {:?}", rx.next().now_or_never());
+//         println!("3 {:?}", rx.next().now_or_never());
+//         // println!("{:?}", rx.next().await);
+//         // println!("{:?}", rx.next().await);
+//         // println!("{:?}", rx.next().await);
+//         // while let Some(n) = rx.next().now_or_never() {
+//         //     println!("got {:?}", n);
+//         // }
+//         // println!("{:?}", rx.next().await);
+//         // println!("{:?}", rx.next().await);
+//         // println!("{:?}", rx.next().await);
 //     };
 //     Runtime::new().unwrap().spawn(f).run().unwrap();
 // }

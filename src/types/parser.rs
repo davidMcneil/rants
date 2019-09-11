@@ -24,7 +24,8 @@ impl FromStr for ServerControl {
     type Err = RantsError;
 
     fn from_str(s: &str) -> Result<Self, RantsError> {
-        let (_, control) = control(s).map_err(|_| RantsError::FailedToParse(String::from(s)))?;
+        let (_, control) =
+            control(s).map_err(|_| RantsError::InvalidServerControl(String::from(s)))?;
         Ok(control)
     }
 }

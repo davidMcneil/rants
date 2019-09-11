@@ -7,9 +7,7 @@ fn unit_connect_serialization() {
         verbose: true,
         pedantic: false,
         tls_required: true,
-        authorization: Some(Authorization::AuthToken {
-            auth_token: String::from("auth_token"),
-        }),
+        authorization: Some(Authorization::token(String::from("auth_token"))),
         name: Some(String::from("client_name")),
         language: String::from("rust"),
         version: String::from("0.1.0"),
@@ -27,10 +25,10 @@ fn unit_connect_serialization() {
         verbose: true,
         pedantic: false,
         tls_required: true,
-        authorization: Some(Authorization::UsernamePassword {
-            username: String::from("username"),
-            password: String::from("password"),
-        }),
+        authorization: Some(Authorization::username_password(
+            String::from("username"),
+            String::from("password"),
+        )),
         name: Some(String::from("client_name")),
         language: String::from("rust"),
         version: String::from("0.1.0"),

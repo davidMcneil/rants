@@ -3,9 +3,13 @@
         "NATS",
         "Oneshot",
         "Unsub",
+        "clippy",
         "combinator",
         "combinators",
+        "deserializer",
         "msgs",
-        "proto"
+        "proto",
+        "serializer",
+        "splitn"
     ]
 }

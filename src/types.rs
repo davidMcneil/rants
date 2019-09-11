@@ -1,3 +1,4 @@
+mod address;
 mod error;
 mod parser;
 mod state;
@@ -14,8 +15,11 @@ use tokio::sync::mpsc::Sender as MpscSender;
 
 use crate::constants;
 
-pub use self::error::{RantsError, RantsResult};
-pub use self::state::{ClientState, ConnectionState, StateTransition, StateTransitionResult};
+pub use self::{
+    address::Address,
+    error::{RantsError, RantsResult},
+    state::{ClientState, ConnectionState, StateTransition, StateTransitionResult},
+};
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -28,14 +32,14 @@ pub use self::state::{ClientState, ConnectionState, StateTransition, StateTransi
 /// handle INFO messages.
 ///
 /// https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#info  
-#[derive(Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct Info {
     pub(crate) server_id: String,
     pub(crate) version: String,
     pub(crate) go: String,
     pub(crate) host: String,
     pub(crate) port: u16,
-    pub(crate) max_payload: u64,
+    pub(crate) max_payload: usize,
     pub(crate) proto: i32,
     pub(crate) client_id: Option<u64>,
     #[serde(default)]
@@ -45,7 +49,7 @@ pub struct Info {
     #[serde(default)]
     pub(crate) tls_verify: bool,
     #[serde(default)]
-    pub(crate) connect_urls: Vec<String>,
+    pub(crate) connect_urls: Vec<Address>,
 }
 
 impl Info {
@@ -81,7 +85,7 @@ impl Info {
     }
 
     /// Maximum payload size, in bytes, that the server will accept from the client.
-    pub fn max_payload(&self) -> u64 {
+    pub fn max_payload(&self) -> usize {
         self.max_payload
     }
 
@@ -117,18 +121,19 @@ impl Info {
     }
 
     /// An optional list of server urls that a client can connect to.
-    pub fn connect_urls(&self) -> &[String] {
+    pub fn connect_urls(&self) -> &[Address] {
         &self.connect_urls
     }
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
-enum Authorization {
-    AuthToken {
-        auth_token: String,
+pub enum Authorization {
+    Token {
+        #[serde(rename = "auth_token")]
+        token: String,
     },
     UsernamePassword {
         #[serde(rename = "user")]
@@ -138,13 +143,35 @@ enum Authorization {
     },
 }
 
+impl Authorization {
+    pub fn token(token: String) -> Self {
+        Authorization::Token { token }
+    }
+
+    pub fn username_password(username: String, password: String) -> Self {
+        Authorization::UsernamePassword { username, password }
+    }
+}
+
+impl fmt::Display for Authorization {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self {
+            Authorization::Token { token } => write!(f, "{}", token)?,
+            Authorization::UsernamePassword { username, password } => {
+                write!(f, "{}:{}", username, password)?
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The CONNECT message is the client version of the INFO message. Once the client has established
 /// a TCP/IP socket connection with the NATS server, and an INFO message has been received from the
 /// server, the client may send a CONNECT message to the NATS server to provide more information
 /// about the current connection as well as security information.
 ///
 /// https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#connect
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Connect {
     verbose: bool,
     pedantic: bool,
@@ -200,14 +227,20 @@ impl Connect {
     }
 
     /// Set the authorization to use a token
-    pub fn auth_token(&mut self, auth_token: String) -> &mut Self {
-        self.authorization = Some(Authorization::AuthToken { auth_token });
+    pub fn token(&mut self, token: String) -> &mut Self {
+        self.authorization = Some(Authorization::token(token));
         self
     }
 
     /// Set the authorization to use a username and password
     pub fn username_password(&mut self, username: String, password: String) -> &mut Self {
-        self.authorization = Some(Authorization::UsernamePassword { username, password });
+        self.authorization = Some(Authorization::username_password(username, password));
+        self
+    }
+
+    /// Set the authorization
+    pub fn set_authorization(&mut self, authorization: Option<Authorization>) -> &mut Self {
+        self.authorization = authorization;
         self
     }
 
@@ -405,6 +438,7 @@ pub struct Subscription {
     pub(crate) subject: Subject,
     pub(crate) sid: Sid,
     pub(crate) queue_group: Option<String>,
+    pub(crate) unsubscribe_after: Option<u64>,
     pub(crate) tx: MpscSender<Vec<u8>>,
 }
 
@@ -414,6 +448,7 @@ impl Subscription {
             subject,
             sid: SID.fetch_add(1, Ordering::Relaxed),
             queue_group,
+            unsubscribe_after: None,
             tx,
         }
     }

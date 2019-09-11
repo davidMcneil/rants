@@ -1,5 +1,7 @@
-use std::net::SocketAddr;
+use std::fmt;
 use tokio::net::tcp::split::TcpStreamWriteHalf;
+
+use crate::types::Address;
 
 // Internal state representation. Identical to `ClientState` but tracks internal implementation
 // details such as `TcpStreamWriteHalf`.
@@ -10,8 +12,8 @@ use tokio::net::tcp::split::TcpStreamWriteHalf;
 // now, the writer operates at the tcp layer writing raw bytes while the reader uses a custom
 // codec.
 pub enum ConnectionState {
-    Connected(SocketAddr, TcpStreamWriteHalf),
-    Connecting(SocketAddr),
+    Connected(Address, TcpStreamWriteHalf),
+    Connecting(Address),
     Disconnected,
     // If we are coming from a connected state, we have a `TcpStreamWriteHalf` to close
     Disconnecting(Option<TcpStreamWriteHalf>),
@@ -19,7 +21,7 @@ pub enum ConnectionState {
 
 #[derive(Debug)]
 pub enum StateTransition {
-    ToConnecting(SocketAddr),
+    ToConnecting(Address),
     ToConnected(TcpStreamWriteHalf),
     ToDisconnecting,
     ToDisconnected,
@@ -35,10 +37,10 @@ pub enum StateTransitionResult {
 ///
 /// ```text
 ///                                              Client State Diagram
-///         +-------------------------------+--------------------------------------------------------------+
-///         |                               |                                                              |
-///         V                               |                                                              v
-/// +-------+--------+             +--------+-------+            +----------------+               +--------+-------+
+///                                    +--------+----------------------------------------------------------+
+///                                    |        |                                                          |
+///                                    |        v                                                          v
+/// +----------------+             +---+--------+---+            +----------------+               +--------+-------+
 /// |                |             |                |            |                |               |                |
 /// |  Disconnected  +------------>+   Connecting   +----------->+   Connected    +-------------->+ Disconnecting  |
 /// |                |             |                |            |                |               |                |
@@ -49,8 +51,8 @@ pub enum StateTransitionResult {
 /// ```
 #[derive(Clone, Debug)]
 pub enum ClientState {
-    Connected(SocketAddr),
-    Connecting(SocketAddr),
+    Connected(Address),
+    Connecting(Address),
     Disconnected,
     Disconnecting,
 }
@@ -93,5 +95,17 @@ impl From<&ConnectionState> for ClientState {
             ConnectionState::Disconnected => ClientState::Disconnected,
             ConnectionState::Disconnecting(_) => ClientState::Disconnecting,
         }
+    }
+}
+
+impl fmt::Display for ClientState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ClientState::Connected(address) => write!(f, "Connected({})", address)?,
+            ClientState::Connecting(address) => write!(f, "Connecting({})", address)?,
+            ClientState::Disconnected => write!(f, "Disconnected")?,
+            ClientState::Disconnecting => write!(f, "Disconnecting")?,
+        }
+        Ok(())
     }
 }
