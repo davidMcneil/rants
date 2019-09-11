@@ -11,6 +11,7 @@ pub enum RantsError {
     InvalidSubject(String),
     InvalidTerminator(Vec<u8>),
     Io(io::Error),
+    NoResponse,
     NotConnected,
     NotEnoughData,
     UnknownSid(Sid),
@@ -29,6 +30,7 @@ impl fmt::Display for RantsError {
                 write!(f, "invalid message terminator {:?}", terminator)
             }
             RantsError::Io(e) => write!(f, "{}", e),
+            RantsError::NoResponse => write!(f, "no response"),
             RantsError::NotConnected => write!(f, "not connected"),
             RantsError::NotEnoughData => write!(f, "not enough data"),
             RantsError::InvalidProtocol(protocol) => write!(f, "invalid protocol '{}'", protocol),

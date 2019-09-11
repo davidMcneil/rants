@@ -28,6 +28,7 @@ use tokio::{
     },
     timer::Timeout,
 };
+use uuid::Uuid;
 
 use crate::{
     codec::Codec,
@@ -341,8 +342,26 @@ impl Client {
     }
 
     /// TODO: comments
-    pub async fn request(&self, subject: &Subject, payload: &[u8]) -> RantsResult<Vec<u8>> {
-        unimplemented!()
+    pub async fn request(
+        wrapped_client: Arc<Mutex<Self>>,
+        subject: &Subject,
+        payload: &[u8],
+    ) -> RantsResult<Vec<u8>> {
+        // This uses the old method of request reply. It creates a temporary subscription that is
+        // immediately unsubscribed from.
+        // See https://github.com/nats-io/nats.go/issues/294 for a different implementation.
+        let inbox_uuid = Uuid::new_v4();
+        let reply_to = format!("{}.{}", constants::INBOX_PREFIX, inbox_uuid).parse()?;
+        let mut rx = {
+            let mut client = wrapped_client.lock().await;
+            let (sid, rx) = client.subscribe(&reply_to, 1).await?;
+            client.unsubscribe_with_max_msgs(sid, 1).await?;
+            client
+                .publish_with_reply(subject, &reply_to, payload)
+                .await?;
+            rx
+        };
+        Ok(rx.next().await.ok_or(RantsError::NoResponse)?)
     }
 
     /// Send a `PING` to the server.

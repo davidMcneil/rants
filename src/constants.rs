@@ -4,6 +4,7 @@ pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const NATS_PROTOCOL: &str = "nats";
 pub const NATS_DEFAULT_PORT: u16 = 4222;
 pub const DEFAULT_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub const INBOX_PREFIX: &str = "_INBOX";
 
 // Subject special characters
 pub const SUBJECT_TOKEN_DELIMITER: &str = ".";

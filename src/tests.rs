@@ -67,8 +67,8 @@ fn integration_echo() {
         let mut rng = rand::thread_rng();
         let total = 1000;
         let wrapped_client = Client::new(vec![
-            "172.217.9.78:4222".parse().unwrap(),
-            "172.217.9.78".parse().unwrap(),
+            "127.0.0.1:4222".parse().unwrap(),
+            "127.0.0.1".parse().unwrap(),
         ]);
         {
             let mut client = wrapped_client.lock().await;
