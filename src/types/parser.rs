@@ -16,8 +16,8 @@ use serde_json;
 use std::str::FromStr;
 
 use crate::{
-    constants,
     types::{ProtocolError, RantsError, ServerControl, Subject},
+    util,
 };
 
 impl FromStr for ServerControl {
@@ -43,32 +43,29 @@ impl FromStr for Subject {
 
 fn control(input: &str) -> IResult<&str, ServerControl> {
     let (input, control) = alt((info, msg, ping, pong, plus_ok, minus_err))(input)?;
-    tag(constants::MESSAGE_TERMINATOR)(input)?;
+    tag(util::MESSAGE_TERMINATOR)(input)?;
     Ok((input, control))
 }
 
 fn info(input: &str) -> IResult<&str, ServerControl> {
-    let (input, _) = tag_no_case(constants::INFO_OP_NAME)(input)?;
+    let (input, _) = tag_no_case(util::INFO_OP_NAME)(input)?;
     let (input, _) = space1(input)?;
-    let (input, info) = map_res(
-        take_until(constants::MESSAGE_TERMINATOR),
-        serde_json::from_str,
-    )(input)?;
+    let (input, info) = map_res(take_until(util::MESSAGE_TERMINATOR), serde_json::from_str)(input)?;
     Ok((input, ServerControl::Info(info)))
 }
 
 fn token(input: &str) -> IResult<&str, &str> {
-    alt((alphanumeric1, tag(constants::SUBJECT_WILDCARD)))(input)
+    alt((alphanumeric1, tag(util::SUBJECT_WILDCARD)))(input)
 }
 
 fn full_wildcard(input: &str) -> IResult<&str, &str> {
-    let (input, _) = tag(constants::SUBJECT_TOKEN_DELIMITER)(input)?;
-    tag(constants::SUBJECT_FULL_WILDCARD)(input)
+    let (input, _) = tag(util::SUBJECT_TOKEN_DELIMITER)(input)?;
+    tag(util::SUBJECT_FULL_WILDCARD)(input)
 }
 
 fn subject(input: &str) -> IResult<&str, Subject> {
     let (input, tokens) =
-        separated_nonempty_list(tag(constants::SUBJECT_TOKEN_DELIMITER), token)(input)?;
+        separated_nonempty_list(tag(util::SUBJECT_TOKEN_DELIMITER), token)(input)?;
     let (input, full_wildcard) = opt(full_wildcard)(input)?;
     let tokens = tokens.iter().map(|s| String::from(*s)).collect();
     let subject = Subject {
@@ -85,7 +82,7 @@ fn reply_to(input: &str) -> IResult<&str, Subject> {
 }
 
 fn msg(input: &str) -> IResult<&str, ServerControl> {
-    let (input, _) = tag_no_case(constants::MSG_OP_NAME)(input)?;
+    let (input, _) = tag_no_case(util::MSG_OP_NAME)(input)?;
     let (input, _) = space1(input)?;
     let (input, subject) = subject(input)?;
     let (input, _) = space1(input)?;
@@ -105,87 +102,87 @@ fn msg(input: &str) -> IResult<&str, ServerControl> {
 }
 
 fn ping(input: &str) -> IResult<&str, ServerControl> {
-    let (input, _) = tag_no_case(constants::PING_OP_NAME)(input)?;
+    let (input, _) = tag_no_case(util::PING_OP_NAME)(input)?;
     Ok((input, ServerControl::Ping))
 }
 
 fn pong(input: &str) -> IResult<&str, ServerControl> {
-    let (input, _) = tag_no_case(constants::PONG_OP_NAME)(input)?;
+    let (input, _) = tag_no_case(util::PONG_OP_NAME)(input)?;
     Ok((input, ServerControl::Pong))
 }
 
 fn plus_ok(input: &str) -> IResult<&str, ServerControl> {
-    let (input, _) = tag_no_case(constants::OK_OP_NAME)(input)?;
+    let (input, _) = tag_no_case(util::OK_OP_NAME)(input)?;
     Ok((input, ServerControl::Ok))
 }
 
 fn unknown_protocol_operation(input: &str) -> IResult<&str, ProtocolError> {
-    let (input, _) = tag(constants::UNKNOWN_PROTOCOL_OPERATION)(input)?;
+    let (input, _) = tag(util::UNKNOWN_PROTOCOL_OPERATION)(input)?;
     Ok((input, ProtocolError::UnknownProtocolOperation))
 }
 
 fn attempted_to_connect_to_route_port(input: &str) -> IResult<&str, ProtocolError> {
-    let (input, _) = tag(constants::ATTEMPTED_TO_CONNECT_TO_ROUTE_PORT)(input)?;
+    let (input, _) = tag(util::ATTEMPTED_TO_CONNECT_TO_ROUTE_PORT)(input)?;
     Ok((input, ProtocolError::AttemptedToConnectToRoutePort))
 }
 
 fn authorization_violation(input: &str) -> IResult<&str, ProtocolError> {
-    let (input, _) = tag(constants::AUTHORIZATION_VIOLATION)(input)?;
+    let (input, _) = tag(util::AUTHORIZATION_VIOLATION)(input)?;
     Ok((input, ProtocolError::AuthorizationViolation))
 }
 
 fn authorization_timeout(input: &str) -> IResult<&str, ProtocolError> {
-    let (input, _) = tag(constants::AUTHORIZATION_TIMEOUT)(input)?;
+    let (input, _) = tag(util::AUTHORIZATION_TIMEOUT)(input)?;
     Ok((input, ProtocolError::AuthorizationTimeout))
 }
 
 fn invalid_client_protocol(input: &str) -> IResult<&str, ProtocolError> {
-    let (input, _) = tag(constants::INVALID_CLIENT_PROTOCOL)(input)?;
+    let (input, _) = tag(util::INVALID_CLIENT_PROTOCOL)(input)?;
     Ok((input, ProtocolError::InvalidClientProtocol))
 }
 
 fn maximum_control_line_exceeded(input: &str) -> IResult<&str, ProtocolError> {
-    let (input, _) = tag(constants::MAXIMUM_CONTROL_LINE_EXCEEDED)(input)?;
+    let (input, _) = tag(util::MAXIMUM_CONTROL_LINE_EXCEEDED)(input)?;
     Ok((input, ProtocolError::MaximumControlLineExceeded))
 }
 
 fn parser_error(input: &str) -> IResult<&str, ProtocolError> {
-    let (input, _) = tag(constants::PARSER_ERROR)(input)?;
+    let (input, _) = tag(util::PARSER_ERROR)(input)?;
     Ok((input, ProtocolError::ParserError))
 }
 
 fn secure_connection_tls_required(input: &str) -> IResult<&str, ProtocolError> {
-    let (input, _) = tag(constants::SECURE_CONNECTION_TLS_REQUIRED)(input)?;
+    let (input, _) = tag(util::SECURE_CONNECTION_TLS_REQUIRED)(input)?;
     Ok((input, ProtocolError::SecureConnectionTlsRequired))
 }
 
 fn stale_connection(input: &str) -> IResult<&str, ProtocolError> {
-    let (input, _) = tag(constants::STALE_CONNECTION)(input)?;
+    let (input, _) = tag(util::STALE_CONNECTION)(input)?;
     Ok((input, ProtocolError::StaleConnection))
 }
 
 fn maximum_connections_exceeded(input: &str) -> IResult<&str, ProtocolError> {
-    let (input, _) = tag(constants::MAXIMUM_CONNECTIONS_EXCEEDED)(input)?;
+    let (input, _) = tag(util::MAXIMUM_CONNECTIONS_EXCEEDED)(input)?;
     Ok((input, ProtocolError::MaximumConnectionsExceeded))
 }
 
 fn slow_consumer(input: &str) -> IResult<&str, ProtocolError> {
-    let (input, _) = tag(constants::SLOW_CONSUMER)(input)?;
+    let (input, _) = tag(util::SLOW_CONSUMER)(input)?;
     Ok((input, ProtocolError::SlowConsumer))
 }
 
 fn maximum_payload_violation(input: &str) -> IResult<&str, ProtocolError> {
-    let (input, _) = tag(constants::MAXIMUM_PAYLOAD_VIOLATION)(input)?;
+    let (input, _) = tag(util::MAXIMUM_PAYLOAD_VIOLATION)(input)?;
     Ok((input, ProtocolError::MaximumPayloadViolation))
 }
 
 fn invalid_subject(input: &str) -> IResult<&str, ProtocolError> {
-    let (input, _) = tag(constants::INVALID_SUBJECT)(input)?;
+    let (input, _) = tag(util::INVALID_SUBJECT)(input)?;
     Ok((input, ProtocolError::InvalidSubject))
 }
 
 fn permissions_violation_for_subscription(input: &str) -> IResult<&str, ProtocolError> {
-    let (input, _) = tag(constants::PERMISSIONS_VIOLATION_FOR_SUBSCRIPTION)(input)?;
+    let (input, _) = tag(util::PERMISSIONS_VIOLATION_FOR_SUBSCRIPTION)(input)?;
     let (input, _) = space1(input)?;
     let (input, subject) = subject(input)?;
     Ok((
@@ -195,7 +192,7 @@ fn permissions_violation_for_subscription(input: &str) -> IResult<&str, Protocol
 }
 
 fn permissions_violation_for_publish(input: &str) -> IResult<&str, ProtocolError> {
-    let (input, _) = tag(constants::PERMISSIONS_VIOLATION_FOR_PUBLISH)(input)?;
+    let (input, _) = tag(util::PERMISSIONS_VIOLATION_FOR_PUBLISH)(input)?;
     let (input, _) = space1(input)?;
     let (input, subject) = subject(input)?;
     Ok((
@@ -230,7 +227,7 @@ fn parse_protocol_err(input: &str) -> IResult<&str, ProtocolError> {
 }
 
 fn minus_err(input: &str) -> IResult<&str, ServerControl> {
-    let (input, _) = tag_no_case(constants::ERR_OP_NAME)(input)?;
+    let (input, _) = tag_no_case(util::ERR_OP_NAME)(input)?;
     let (input, _) = space1(input)?;
     let (input, e) = parse_protocol_err(input)?;
     Ok((input, ServerControl::Err(e)))

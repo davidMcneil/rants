@@ -13,7 +13,7 @@ use std::{
 };
 use tokio::sync::mpsc::Sender as MpscSender;
 
-use crate::constants;
+use crate::util;
 
 pub use self::{
     address::Address,
@@ -309,7 +309,7 @@ impl Default for Connect {
             authorization: None,
             name: None,
             language: String::from("rust"),
-            version: String::from(constants::CLIENT_VERSION),
+            version: String::from(util::CLIENT_VERSION),
             protocol: 1,
             echo: false,
         }
@@ -342,48 +342,41 @@ impl fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ProtocolError::UnknownProtocolOperation => {
-                write!(f, "{}", constants::UNKNOWN_PROTOCOL_OPERATION)?
+                write!(f, "{}", util::UNKNOWN_PROTOCOL_OPERATION)?
             }
             ProtocolError::AttemptedToConnectToRoutePort => {
-                write!(f, "{}", constants::ATTEMPTED_TO_CONNECT_TO_ROUTE_PORT)?
+                write!(f, "{}", util::ATTEMPTED_TO_CONNECT_TO_ROUTE_PORT)?
             }
             ProtocolError::AuthorizationViolation => {
-                write!(f, "{}", constants::AUTHORIZATION_VIOLATION)?
+                write!(f, "{}", util::AUTHORIZATION_VIOLATION)?
             }
-            ProtocolError::AuthorizationTimeout => {
-                write!(f, "{}", constants::AUTHORIZATION_TIMEOUT)?
-            }
-            ProtocolError::InvalidClientProtocol => {
-                write!(f, "{}", constants::INVALID_CLIENT_PROTOCOL)?
-            }
+            ProtocolError::AuthorizationTimeout => write!(f, "{}", util::AUTHORIZATION_TIMEOUT)?,
+            ProtocolError::InvalidClientProtocol => write!(f, "{}", util::INVALID_CLIENT_PROTOCOL)?,
             ProtocolError::MaximumControlLineExceeded => {
-                write!(f, "{}", constants::MAXIMUM_CONTROL_LINE_EXCEEDED)?
+                write!(f, "{}", util::MAXIMUM_CONTROL_LINE_EXCEEDED)?
             }
-            ProtocolError::ParserError => write!(f, "{}", constants::PARSER_ERROR)?,
+            ProtocolError::ParserError => write!(f, "{}", util::PARSER_ERROR)?,
             ProtocolError::SecureConnectionTlsRequired => {
-                write!(f, "{}", constants::SECURE_CONNECTION_TLS_REQUIRED)?
+                write!(f, "{}", util::SECURE_CONNECTION_TLS_REQUIRED)?
             }
-            ProtocolError::StaleConnection => write!(f, "{}", constants::STALE_CONNECTION)?,
+            ProtocolError::StaleConnection => write!(f, "{}", util::STALE_CONNECTION)?,
             ProtocolError::MaximumConnectionsExceeded => {
-                write!(f, "{}", constants::MAXIMUM_CONNECTIONS_EXCEEDED)?
+                write!(f, "{}", util::MAXIMUM_CONNECTIONS_EXCEEDED)?
             }
-            ProtocolError::SlowConsumer => write!(f, "{}", constants::SLOW_CONSUMER)?,
+            ProtocolError::SlowConsumer => write!(f, "{}", util::SLOW_CONSUMER)?,
             ProtocolError::MaximumPayloadViolation => {
-                write!(f, "{}", constants::MAXIMUM_PAYLOAD_VIOLATION)?
+                write!(f, "{}", util::MAXIMUM_PAYLOAD_VIOLATION)?
             }
-            ProtocolError::InvalidSubject => write!(f, "{}", constants::INVALID_SUBJECT)?,
+            ProtocolError::InvalidSubject => write!(f, "{}", util::INVALID_SUBJECT)?,
             ProtocolError::PermissionsViolationForSubscription(subject) => write!(
                 f,
                 "{} {}",
-                constants::PERMISSIONS_VIOLATION_FOR_SUBSCRIPTION,
+                util::PERMISSIONS_VIOLATION_FOR_SUBSCRIPTION,
                 subject
             )?,
-            ProtocolError::PermissionsViolationForPublish(subject) => write!(
-                f,
-                "{} {}",
-                constants::PERMISSIONS_VIOLATION_FOR_PUBLISH,
-                subject
-            )?,
+            ProtocolError::PermissionsViolationForPublish(subject) => {
+                write!(f, "{} {}", util::PERMISSIONS_VIOLATION_FOR_PUBLISH, subject)?
+            }
         }
         Ok(())
     }
@@ -518,29 +511,29 @@ impl fmt::Display for ClientControl<'_> {
             Self::Connect(connect) => write!(
                 f,
                 "{} {}{}",
-                constants::CONNECT_OP_NAME,
+                util::CONNECT_OP_NAME,
                 serde_json::to_string(connect).expect("to serialize Connect"),
-                constants::MESSAGE_TERMINATOR
+                util::MESSAGE_TERMINATOR
             ),
             Self::Pub(subject, reply_to, len) => {
                 if let Some(reply_to) = reply_to {
                     write!(
                         f,
                         "{} {} {} {}{}",
-                        constants::PUB_OP_NAME,
+                        util::PUB_OP_NAME,
                         subject,
                         reply_to,
                         len,
-                        constants::MESSAGE_TERMINATOR
+                        util::MESSAGE_TERMINATOR
                     )
                 } else {
                     write!(
                         f,
                         "{} {} {}{}",
-                        constants::PUB_OP_NAME,
+                        util::PUB_OP_NAME,
                         subject,
                         len,
-                        constants::MESSAGE_TERMINATOR
+                        util::MESSAGE_TERMINATOR
                     )
                 }
             }
@@ -549,20 +542,20 @@ impl fmt::Display for ClientControl<'_> {
                     write!(
                         f,
                         "{} {} {} {}{}",
-                        constants::SUB_OP_NAME,
+                        util::SUB_OP_NAME,
                         subscription.subject,
                         queue_group,
                         subscription.sid,
-                        constants::MESSAGE_TERMINATOR
+                        util::MESSAGE_TERMINATOR
                     )
                 } else {
                     write!(
                         f,
                         "{} {} {}{}",
-                        constants::SUB_OP_NAME,
+                        util::SUB_OP_NAME,
                         subscription.subject,
                         subscription.sid,
-                        constants::MESSAGE_TERMINATOR
+                        util::MESSAGE_TERMINATOR
                     )
                 }
             }
@@ -571,33 +564,23 @@ impl fmt::Display for ClientControl<'_> {
                     write!(
                         f,
                         "{} {} {}{}",
-                        constants::UNSUB_OP_NAME,
+                        util::UNSUB_OP_NAME,
                         sid,
                         max_msgs,
-                        constants::MESSAGE_TERMINATOR
+                        util::MESSAGE_TERMINATOR
                     )
                 } else {
                     write!(
                         f,
                         "{} {}{}",
-                        constants::UNSUB_OP_NAME,
+                        util::UNSUB_OP_NAME,
                         sid,
-                        constants::MESSAGE_TERMINATOR
+                        util::MESSAGE_TERMINATOR
                     )
                 }
             }
-            Self::Ping => write!(
-                f,
-                "{}{}",
-                constants::PING_OP_NAME,
-                constants::MESSAGE_TERMINATOR
-            ),
-            Self::Pong => write!(
-                f,
-                "{}{}",
-                constants::PONG_OP_NAME,
-                constants::MESSAGE_TERMINATOR
-            ),
+            Self::Ping => write!(f, "{}{}", util::PING_OP_NAME, util::MESSAGE_TERMINATOR),
+            Self::Pong => write!(f, "{}{}", util::PONG_OP_NAME, util::MESSAGE_TERMINATOR),
         }
     }
 }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::{constants::*, types::*};
+use crate::{types::*, util::*};
 
 #[test]
 fn unit_info() {

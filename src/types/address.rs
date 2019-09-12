@@ -2,7 +2,7 @@ use serde::{de, Deserialize, Deserializer};
 use std::{convert::Infallible, fmt, net::SocketAddr, str::FromStr};
 
 use super::Authorization;
-use crate::{constants, types::RantsError};
+use crate::{types::RantsError, util};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Address {
@@ -62,7 +62,7 @@ impl FromStr for Address {
         // Parse the protocol
         let (maybe_protocol, s) = split_once(s, "://");
         if let Some(protocol) = maybe_protocol {
-            if protocol != constants::NATS_PROTOCOL {
+            if protocol != util::NATS_PROTOCOL {
                 return Err(RantsError::InvalidProtocol(String::from(protocol)));
             }
         }
@@ -73,7 +73,7 @@ impl FromStr for Address {
             ip_and_maybe_port.parse()?
         } else {
             let ip = ip_and_maybe_port.parse()?;
-            SocketAddr::new(ip, constants::NATS_DEFAULT_PORT)
+            SocketAddr::new(ip, util::NATS_DEFAULT_PORT)
         };
         let authorization = maybe_authorization.map(|s| s.parse().expect("parse authorization"));
         Ok(Address {

@@ -1,19 +1,26 @@
 mod codec;
-mod constants;
 #[cfg(test)]
 mod tests;
 mod types;
+mod util;
 
 use futures::{
     future::{self, Either, FutureExt},
     lock::Mutex,
     stream::StreamExt,
 };
-use log::{error, info};
+use log::{debug, error, info, trace};
 use pin_utils::pin_mut;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
-use std::{collections::HashMap, io::ErrorKind, mem, net::Shutdown, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    io::ErrorKind,
+    mem,
+    net::Shutdown,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::{
     codec::FramedRead,
     io::AsyncWriteExt,
@@ -26,7 +33,7 @@ use tokio::{
         oneshot,
         watch::{self, Receiver as WatchReceiver, Sender as WatchSender},
     },
-    timer::Timeout,
+    timer::{self, Timeout},
 };
 use uuid::Uuid;
 
@@ -38,6 +45,33 @@ use crate::{
         Subject, Subscription,
     },
 };
+
+pub type DelayGenerator = Box<dyn Fn(Arc<Mutex<Client>>, u64, u64) -> Duration + Send>;
+
+pub fn generate_delay_generator(
+    connect_series_tries_before_cool_down: u64,
+    connect_delay: Duration,
+    connect_series_delay: Duration,
+    cool_down: Duration,
+) -> DelayGenerator {
+    Box::new(
+        move |_: Arc<Mutex<Client>>, connect_try: u64, addresses: u64| {
+            if connect_try % (addresses * connect_series_tries_before_cool_down) == 0 {
+                trace!("Using cool down delay {}s", cool_down.as_secs_f32());
+                cool_down
+            } else if connect_try % addresses == 0 {
+                trace!(
+                    "Using connect series delay {}s",
+                    connect_series_delay.as_secs_f32()
+                );
+                connect_series_delay
+            } else {
+                trace!("Using connect delay {}s", connect_delay.as_secs_f32());
+                connect_delay
+            }
+        },
+    )
+}
 
 /// The [NATS](https://nats.io/) client.
 pub struct Client {
@@ -57,6 +91,7 @@ pub struct Client {
     err_tx: WatchSender<ProtocolError>,
     err_rx: WatchReceiver<ProtocolError>,
     tcp_connect_timeout: Duration,
+    delay_generator: DelayGenerator,
     subscriptions: HashMap<Sid, Subscription>,
 }
 
@@ -91,7 +126,13 @@ impl Client {
             ok_rx,
             err_tx,
             err_rx,
-            tcp_connect_timeout: constants::DEFAULT_TCP_CONNECT_TIMEOUT,
+            tcp_connect_timeout: util::DEFAULT_TCP_CONNECT_TIMEOUT,
+            delay_generator: generate_delay_generator(
+                util::DEFAULT_CONNECT_SERIES_TRIES_BEFORE_COOL_DOWN,
+                util::DEFAULT_CONNECT_DELAY,
+                util::DEFAULT_CONNECT_SERIES_DELAY,
+                util::DEFAULT_COOL_DOWN,
+            ),
             subscriptions: HashMap::new(),
         }))
     }
@@ -127,6 +168,11 @@ impl Client {
         self
     }
 
+    // Get a mutable reference to the list of addresses we try to connect to
+    pub fn addresses_mut(&mut self) -> &mut [Address] {
+        &mut self.addresses
+    }
+
     /// Send a connect message to the server using the current [Connect](struct.Connect.html).
     pub async fn send_connect(&mut self) -> RantsResult<()> {
         if let ConnectionState::Connected(address, writer) = &mut self.state {
@@ -147,7 +193,7 @@ impl Client {
         // Get a continuous iterator over a shuffled list of all possible addresses.
         // We randomize the addresses to avoid a thundering herd.
         // See https://nats-io.github.io/docs/developer/reconnect/random.html
-        let mut addresses = {
+        let (addresses_len, mut addresses_iter) = {
             let client = wrapped_client.lock().await;
             let mut addresses = client
                 .addresses
@@ -155,11 +201,31 @@ impl Client {
                 .chain(client.info_rx.get_ref().connect_urls().iter())
                 .cloned()
                 .collect::<Vec<_>>();
+            let addresses_len = addresses.len() as u64;
             addresses.shuffle(&mut thread_rng());
-            addresses.into_iter().cycle()
+            (addresses_len, addresses.into_iter().cycle())
         };
 
+        let mut connect_try = 0;
         loop {
+            // Effectively move the delay logic after we try a connect, but keep it at the start
+            // of the loop so we do not have to do it before every continue statement.
+            if connect_try != 0 {
+                let delay = (wrapped_client.lock().await.delay_generator)(
+                    Arc::clone(&wrapped_client),
+                    connect_try,
+                    addresses_len,
+                );
+                debug!(
+                    "Delaying for {}s after {} connect tries with {} addresses",
+                    delay.as_secs_f32(),
+                    connect_try,
+                    addresses_len
+                );
+                timer::delay(Instant::now() + delay).await;
+            }
+            connect_try += 1;
+
             let mut client = wrapped_client.lock().await;
 
             match client.state {
@@ -178,7 +244,12 @@ impl Client {
                 _ => (),
             }
 
-            let address = addresses.next().expect("cycle iterator");
+            let address = if let Some(address) = addresses_iter.next() {
+                address
+            } else {
+                error!("No addresses to connect to");
+                continue;
+            };
             client.state_transition(StateTransition::ToConnecting(address.clone()));
 
             // Try to establish a TCP connection
@@ -210,7 +281,7 @@ impl Client {
                     } else {
                         error!(
                             "First message should be {} instead received '{:?}'",
-                            constants::INFO_OP_NAME,
+                            util::INFO_OP_NAME,
                             message
                         );
                         debug_assert!(false);
@@ -230,7 +301,7 @@ impl Client {
                     continue;
                 }
                 Err(_) => {
-                    error!("Timed out waiting for {} message", constants::INFO_OP_NAME);
+                    error!("Timed out waiting for {} message", util::INFO_OP_NAME);
                     continue;
                 }
             }
@@ -333,7 +404,7 @@ impl Client {
             Self::write_line(writer, ClientControl::Pub(subject, reply_to, payload.len())).await?;
             writer.write_all(payload).await?;
             writer
-                .write_all(constants::MESSAGE_TERMINATOR.as_bytes())
+                .write_all(util::MESSAGE_TERMINATOR.as_bytes())
                 .await?;
             Ok(())
         } else {
@@ -351,7 +422,7 @@ impl Client {
         // immediately unsubscribed from.
         // See https://github.com/nats-io/nats.go/issues/294 for a different implementation.
         let inbox_uuid = Uuid::new_v4();
-        let reply_to = format!("{}.{}", constants::INBOX_PREFIX, inbox_uuid).parse()?;
+        let reply_to = format!("{}.{}", util::INBOX_PREFIX, inbox_uuid).parse()?;
         let mut rx = {
             let mut client = wrapped_client.lock().await;
             let (sid, rx) = client.subscribe(&reply_to, 1).await?;
@@ -643,39 +714,31 @@ impl Client {
             }
             ServerMessage::Ping => {
                 if let Err(e) = wrapped_client.lock().await.ping_tx.broadcast(()) {
-                    error!(
-                        "Failed to broadcast {}, err: {}",
-                        constants::PING_OP_NAME,
-                        e
-                    );
+                    error!("Failed to broadcast {}, err: {}", util::PING_OP_NAME, e);
                 }
                 // Spawn a task to send a pong replying to the ping
                 let wrapped_client = Arc::clone(&wrapped_client);
                 tokio::spawn(async move {
                     let mut client = wrapped_client.lock().await;
                     if let Err(e) = client.pong().await {
-                        error!("Failed to send {}, err: {}", constants::PONG_OP_NAME, e);
+                        error!("Failed to send {}, err: {}", util::PONG_OP_NAME, e);
                     }
                 });
             }
             ServerMessage::Pong => {
                 if let Err(e) = wrapped_client.lock().await.pong_tx.broadcast(()) {
-                    error!(
-                        "Failed to broadcast {}, err: {}",
-                        constants::PONG_OP_NAME,
-                        e
-                    );
+                    error!("Failed to broadcast {}, err: {}", util::PONG_OP_NAME, e);
                 }
             }
             ServerMessage::Ok => {
                 if let Err(e) = wrapped_client.lock().await.ok_tx.broadcast(()) {
-                    error!("Failed to broadcast {}, err: {}", constants::OK_OP_NAME, e);
+                    error!("Failed to broadcast {}, err: {}", util::OK_OP_NAME, e);
                 }
             }
             ServerMessage::Err(e) => {
                 error!("Protocol error, err: '{}'", e);
                 if let Err(e) = wrapped_client.lock().await.err_tx.broadcast(e) {
-                    error!("Failed to broadcast {}, err: {}", constants::ERR_OP_NAME, e);
+                    error!("Failed to broadcast {}, err: {}", util::ERR_OP_NAME, e);
                 }
             }
         }
@@ -683,11 +746,7 @@ impl Client {
 
     fn handle_info_message(&mut self, info: Info) {
         if let Err(e) = self.info_tx.broadcast(info) {
-            error!(
-                "Failed to broadcast {}, err: {}",
-                constants::INFO_OP_NAME,
-                e
-            );
+            error!("Failed to broadcast {}, err: {}", util::INFO_OP_NAME, e);
         }
     }
 

@@ -4,6 +4,10 @@ pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const NATS_PROTOCOL: &str = "nats";
 pub const NATS_DEFAULT_PORT: u16 = 4222;
 pub const DEFAULT_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub const DEFAULT_CONNECT_SERIES_TRIES_BEFORE_COOL_DOWN: u64 = 3;
+pub const DEFAULT_CONNECT_DELAY: Duration = Duration::from_secs(0);
+pub const DEFAULT_CONNECT_SERIES_DELAY: Duration = Duration::from_secs(5);
+pub const DEFAULT_COOL_DOWN: Duration = Duration::from_secs(60);
 pub const INBOX_PREFIX: &str = "_INBOX";
 
 // Subject special characters

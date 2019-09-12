@@ -7,8 +7,8 @@ use std::{io, mem, str, usize};
 use tokio::codec::Decoder;
 
 use crate::{
-    constants::MESSAGE_TERMINATOR,
     types::{Msg, RantsError, RantsResult, ServerControl, ServerMessage, Subject},
+    util::MESSAGE_TERMINATOR,
 };
 
 enum State {
