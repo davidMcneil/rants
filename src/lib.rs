@@ -11,8 +11,8 @@ use futures::{
 };
 use log::{debug, error, info, trace};
 use pin_utils::pin_mut;
+use rand;
 use rand::seq::SliceRandom;
-use rand::thread_rng;
 use std::{
     collections::HashMap,
     io::ErrorKind,
@@ -39,12 +39,14 @@ use uuid::Uuid;
 
 use crate::{
     codec::Codec,
+    error::{Error, Result},
     types::{
-        Address, ClientControl, ClientState, Connect, ConnectionState, Info, ProtocolError,
-        RantsError, RantsResult, ServerMessage, Sid, StateTransition, StateTransitionResult,
-        Subject, Subscription,
+        Address, ClientControl, Connect, ConnectionState, Info, ProtocolError, ServerMessage, Sid,
+        StateTransition, StateTransitionResult, Subscription,
     },
 };
+
+pub use crate::types::{error, ClientState, Msg, Subject};
 
 pub type DelayGenerator = Box<dyn Fn(Arc<Mutex<Client>>, u64, u64) -> Duration + Send>;
 
@@ -157,6 +159,11 @@ impl Client {
         &mut self.connect
     }
 
+    // Get a mutable reference to the list of addresses we try to connect to
+    pub fn addresses_mut(&mut self) -> &mut [Address] {
+        &mut self.addresses
+    }
+
     // Get the configured TCP connect timeout
     pub fn tcp_connect_timeout(&self) -> Duration {
         self.tcp_connect_timeout
@@ -168,17 +175,23 @@ impl Client {
         self
     }
 
-    // Get a mutable reference to the list of addresses we try to connect to
-    pub fn addresses_mut(&mut self) -> &mut [Address] {
-        &mut self.addresses
+    // TODO: comments
+    pub fn delay_generator(&mut self) -> &DelayGenerator {
+        &self.delay_generator
+    }
+
+    // TODO: comments
+    pub fn set_delay_generator(&mut self, delay_generator: DelayGenerator) -> &mut Self {
+        self.delay_generator = delay_generator;
+        self
     }
 
     /// Send a connect message to the server using the current [Connect](struct.Connect.html).
-    pub async fn send_connect(&mut self) -> RantsResult<()> {
+    pub async fn send_connect(&mut self) -> Result<()> {
         if let ConnectionState::Connected(address, writer) = &mut self.state {
             Self::send_connect_with_writer(writer, &self.connect, address).await
         } else {
-            Err(RantsError::NotConnected)
+            Err(Error::NotConnected)
         }
     }
 
@@ -202,7 +215,7 @@ impl Client {
                 .cloned()
                 .collect::<Vec<_>>();
             let addresses_len = addresses.len() as u64;
-            addresses.shuffle(&mut thread_rng());
+            addresses.shuffle(&mut rand::thread_rng());
             (addresses_len, addresses.into_iter().cycle())
         };
 
@@ -253,7 +266,6 @@ impl Client {
             client.state_transition(StateTransition::ToConnecting(address.clone()));
 
             // Try to establish a TCP connection
-            // TODO: delay, back off, circuit breaker
             let connect = Timeout::new(
                 TcpStream::connect(address.address()),
                 client.tcp_connect_timeout,
@@ -350,6 +362,12 @@ impl Client {
         let (tx, rx) = oneshot::channel();
         {
             let mut client = wrapped_client.lock().await;
+
+            // If we are already disconnected do not disconnect again
+            if let ConnectionState::Disconnected = client.state {
+                return;
+            }
+
             let mut state_stream = client.state_stream();
             // Spawn a future waiting for the disconnected state
             tokio::spawn(async move {
@@ -369,7 +387,7 @@ impl Client {
     }
 
     /// TODO: comments
-    pub async fn publish(&mut self, subject: &Subject, payload: &[u8]) -> RantsResult<()> {
+    pub async fn publish(&mut self, subject: &Subject, payload: &[u8]) -> Result<()> {
         self.publish_with_optional_reply(subject, None, payload)
             .await
     }
@@ -380,7 +398,7 @@ impl Client {
         subject: &Subject,
         reply_to: &Subject,
         payload: &[u8],
-    ) -> RantsResult<()> {
+    ) -> Result<()> {
         self.publish_with_optional_reply(subject, Some(reply_to), payload)
             .await
     }
@@ -391,11 +409,11 @@ impl Client {
         subject: &Subject,
         reply_to: Option<&Subject>,
         payload: &[u8],
-    ) -> RantsResult<()> {
+    ) -> Result<()> {
         // Check that payload's length does not exceed the servers max_payload
         let max_payload = self.info().max_payload;
         if payload.len() > max_payload {
-            return Err(RantsError::ExceedsMaxPayload {
+            return Err(Error::ExceedsMaxPayload {
                 tried: payload.len(),
                 limit: max_payload,
             });
@@ -408,7 +426,7 @@ impl Client {
                 .await?;
             Ok(())
         } else {
-            Err(RantsError::NotConnected)
+            Err(Error::NotConnected)
         }
     }
 
@@ -417,7 +435,7 @@ impl Client {
         wrapped_client: Arc<Mutex<Self>>,
         subject: &Subject,
         payload: &[u8],
-    ) -> RantsResult<Vec<u8>> {
+    ) -> Result<Msg> {
         // This uses the old method of request reply. It creates a temporary subscription that is
         // immediately unsubscribed from.
         // See https://github.com/nats-io/nats.go/issues/294 for a different implementation.
@@ -432,34 +450,7 @@ impl Client {
                 .await?;
             rx
         };
-        Ok(rx.next().await.ok_or(RantsError::NoResponse)?)
-    }
-
-    /// Send a `PING` to the server.
-    ///
-    /// This method, coupled with a `pong_stream`, can be a useful way to check that the client is
-    /// still connected to the server.
-    pub async fn ping(&mut self) -> RantsResult<()> {
-        if let ConnectionState::Connected(_, writer) = &mut self.state {
-            Self::write_line(writer, ClientControl::Ping).await?;
-            Ok(())
-        } else {
-            Err(RantsError::NotConnected)
-        }
-    }
-
-    /// Send a `PONG` to the server.
-    ///
-    /// Note, you do not have to manually send a `PONG` as part of the servers ping/pong keep
-    /// alive. The client library automatically handles replying to pings. You should not need
-    /// to use this method.
-    pub async fn pong(&mut self) -> RantsResult<()> {
-        if let ConnectionState::Connected(_, writer) = &mut self.state {
-            Self::write_line(writer, ClientControl::Pong).await?;
-            Ok(())
-        } else {
-            Err(RantsError::NotConnected)
-        }
+        Ok(rx.next().await.ok_or(Error::NoResponse)?)
     }
 
     /// TODO: comments
@@ -467,7 +458,7 @@ impl Client {
         &mut self,
         subject: &Subject,
         buffer: usize,
-    ) -> RantsResult<(Sid, MpscReceiver<Vec<u8>>)> {
+    ) -> Result<(Sid, MpscReceiver<Msg>)> {
         self.subscribe_optional_queue_group(subject, None, buffer)
             .await
     }
@@ -478,7 +469,7 @@ impl Client {
         subject: &Subject,
         queue_group: &str,
         buffer: usize,
-    ) -> RantsResult<(Sid, MpscReceiver<Vec<u8>>)> {
+    ) -> Result<(Sid, MpscReceiver<Msg>)> {
         self.subscribe_optional_queue_group(subject, Some(queue_group), buffer)
             .await
     }
@@ -489,7 +480,7 @@ impl Client {
         subject: &Subject,
         queue_group: Option<&str>,
         buffer: usize,
-    ) -> RantsResult<(Sid, MpscReceiver<Vec<u8>>)> {
+    ) -> Result<(Sid, MpscReceiver<Msg>)> {
         if let ConnectionState::Connected(_, writer) = &mut self.state {
             let (tx, rx) = mpsc::channel(buffer);
             let subscription =
@@ -499,17 +490,17 @@ impl Client {
             self.subscriptions.insert(sid, subscription);
             Ok((sid, rx))
         } else {
-            Err(RantsError::NotConnected)
+            Err(Error::NotConnected)
         }
     }
 
     /// TODO: comments
-    pub async fn unsubscribe(&mut self, sid: Sid) -> RantsResult<()> {
+    pub async fn unsubscribe(&mut self, sid: Sid) -> Result<()> {
         self.unsubscribe_optional_max_msgs(sid, None).await
     }
 
     /// TODO: comments
-    pub async fn unsubscribe_with_max_msgs(&mut self, sid: Sid, max_msgs: u64) -> RantsResult<()> {
+    pub async fn unsubscribe_with_max_msgs(&mut self, sid: Sid, max_msgs: u64) -> Result<()> {
         self.unsubscribe_optional_max_msgs(sid, Some(max_msgs))
             .await
     }
@@ -519,11 +510,11 @@ impl Client {
         &mut self,
         sid: Sid,
         max_msgs: Option<u64>,
-    ) -> RantsResult<()> {
+    ) -> Result<()> {
         if let ConnectionState::Connected(_, writer) = &mut self.state {
             let subscription = match self.subscriptions.get_mut(&sid) {
                 Some(subscription) => subscription,
-                None => return Err(RantsError::UnknownSid(sid)),
+                None => return Err(Error::UnknownSid(sid)),
             };
             subscription.unsubscribe_after = max_msgs;
             Self::write_line(writer, ClientControl::Unsub(sid, max_msgs)).await?;
@@ -533,7 +524,7 @@ impl Client {
             }
             Ok(())
         } else {
-            Err(RantsError::NotConnected)
+            Err(Error::NotConnected)
         }
     }
 
@@ -552,8 +543,45 @@ impl Client {
         self.pong_rx.clone()
     }
 
+    /// Get a watch stream of all received `+OK` messages.
+    pub fn ok_stream(&mut self) -> WatchReceiver<()> {
+        self.ok_rx.clone()
+    }
+
+    /// Get a watch stream of all received `-ERR` messages.
+    pub fn err_stream(&mut self) -> WatchReceiver<ProtocolError> {
+        self.err_rx.clone()
+    }
+
+    /// Send a `PING` to the server.
+    ///
+    /// This method, coupled with a `pong_stream`, can be a useful way to check that the client is
+    /// still connected to the server.
+    pub async fn ping(&mut self) -> Result<()> {
+        if let ConnectionState::Connected(_, writer) = &mut self.state {
+            Self::write_line(writer, ClientControl::Ping).await?;
+            Ok(())
+        } else {
+            Err(Error::NotConnected)
+        }
+    }
+
+    /// Send a `PONG` to the server.
+    ///
+    /// Note, you do not have to manually send a `PONG` as part of the servers ping/pong keep
+    /// alive. The client library automatically handles replying to pings. You should not need
+    /// to use this method.
+    pub async fn pong(&mut self) -> Result<()> {
+        if let ConnectionState::Connected(_, writer) = &mut self.state {
+            Self::write_line(writer, ClientControl::Pong).await?;
+            Ok(())
+        } else {
+            Err(Error::NotConnected)
+        }
+    }
+
     /// Send a ping and wait for a pong from the server
-    pub async fn pong_pong(wrapped_client: Arc<Mutex<Self>>) -> RantsResult<()> {
+    pub async fn ping_pong(wrapped_client: Arc<Mutex<Self>>) -> Result<()> {
         let mut pong_stream = {
             let mut client = wrapped_client.lock().await;
             let mut pong_stream = client.pong_stream();
@@ -564,16 +592,6 @@ impl Client {
         };
         pong_stream.next().await;
         Ok(())
-    }
-
-    /// Get a watch stream of all received `+OK` messages.
-    pub fn ok_stream(&mut self) -> WatchReceiver<()> {
-        self.ok_rx.clone()
-    }
-
-    /// Get a watch stream of all received `-ERR` messages.
-    pub fn err_stream(&mut self) -> WatchReceiver<ProtocolError> {
-        self.err_rx.clone()
     }
 
     async fn server_messages_handler(
@@ -651,7 +669,7 @@ impl Client {
             }
             ServerMessage::Msg(msg) => {
                 // Parse the sid
-                let sid_str = msg.sid;
+                let sid_str = &msg.sid;
                 let sid_result = sid_str.parse::<Sid>();
                 let sid = match sid_result {
                     Ok(sid) => sid,
@@ -685,7 +703,8 @@ impl Client {
                     }
                 };
                 // Try and send the message to the subscription receiver
-                if let Err(e) = subscription.tx.try_send(msg.payload) {
+                let subject = msg.subject.clone();
+                if let Err(e) = subscription.tx.try_send(msg) {
                     // If we could not send because the receiver is closed, we no longer
                     // care about this subscription and should unsubscribe
                     if e.is_closed() {
@@ -700,7 +719,7 @@ impl Client {
                     } else {
                         error!(
                             "Failed to send msg to sid '{}' with subject '{}', err: {}",
-                            sid, msg.subject, e
+                            sid, subject, e
                         );
                     }
                 }
@@ -773,7 +792,7 @@ impl Client {
     async fn write_line(
         writer: &mut TcpStreamWriteHalf,
         control_line: ClientControl<'_>,
-    ) -> RantsResult<()> {
+    ) -> Result<()> {
         let line = control_line.to_line();
         Ok(writer.write_all(line.as_bytes()).await?)
     }
@@ -782,7 +801,7 @@ impl Client {
         writer: &mut TcpStreamWriteHalf,
         connect: &Connect,
         address: &Address,
-    ) -> RantsResult<()> {
+    ) -> Result<()> {
         let mut connect = connect.clone();
         // If the address has authorization information, override the default authorization
         if let Some(authorization) = &address.authorization {
@@ -859,5 +878,6 @@ impl Client {
 impl Drop for Client {
     fn drop(&mut self) {
         // TODO: Disconnect on drop
+        trace!("Client was dropped");
     }
 }

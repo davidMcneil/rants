@@ -2,7 +2,46 @@ use super::*;
 use crate::{types::*, util::*};
 
 #[test]
-fn unit_info() {
+fn parse_subject() {
+    let s = "FOO";
+    assert_eq!(&s.parse::<Subject>().unwrap().to_string(), s);
+    let s = "BAR";
+    assert_eq!(&s.parse::<Subject>().unwrap().to_string(), s);
+    let s = "foo.bar";
+    assert_eq!(&s.parse::<Subject>().unwrap().to_string(), s);
+    let s = "foo.BAR";
+    assert_eq!(&s.parse::<Subject>().unwrap().to_string(), s);
+    let s = "FOO.BAR";
+    assert_eq!(&s.parse::<Subject>().unwrap().to_string(), s);
+    let s = "FOO.BAR.BAZ";
+    assert_eq!(&s.parse::<Subject>().unwrap().to_string(), s);
+    let s = "*";
+    assert_eq!(&s.parse::<Subject>().unwrap().to_string(), s);
+    let s = ">";
+    assert_eq!(&s.parse::<Subject>().unwrap().to_string(), s);
+    let s = "foo.>";
+    assert_eq!(&s.parse::<Subject>().unwrap().to_string(), s);
+    let s = "foo.*.baz";
+    assert_eq!(&s.parse::<Subject>().unwrap().to_string(), s);
+    let s = "foo.>";
+    assert_eq!(&s.parse::<Subject>().unwrap().to_string(), s);
+    let s = "foo.a-b_c+d#e";
+    assert_eq!(&s.parse::<Subject>().unwrap().to_string(), s);
+
+    assert!("FOO. BAR".parse::<Subject>().is_err());
+    assert!("".parse::<Subject>().is_err());
+    assert!("foo.".parse::<Subject>().is_err());
+    assert!(".bar ".parse::<Subject>().is_err());
+    assert!("foo..bar".parse::<Subject>().is_err());
+    assert!("foo*.bar".parse::<Subject>().is_err());
+    assert!("f*o.b*r".parse::<Subject>().is_err());
+    assert!("foo>".parse::<Subject>().is_err());
+    assert!("foo>.bar".parse::<Subject>().is_err());
+    assert!(">.bar".parse::<Subject>().is_err());
+}
+
+#[test]
+fn parse_info() {
     assert_eq!(
         ServerControl::from_str(
             "INFO {\"server_id\":\"Zk0GQ3JBSrg3oyxCRRlE09\",\"\
@@ -29,7 +68,7 @@ fn unit_info() {
 }
 
 #[test]
-fn unit_msg() {
+fn parse_msg() {
     let s = Subject::from_str("FOO.BAR").unwrap();
     assert_eq!(
         control("MSG FOO.BAR 9 1032\r\n").unwrap().1,
@@ -56,7 +95,7 @@ fn unit_msg() {
 }
 
 #[test]
-fn unit_ping() {
+fn parse_ping() {
     assert_eq!(
         ServerControl::from_str("PiNG\r\n").unwrap(),
         ServerControl::Ping
@@ -64,7 +103,7 @@ fn unit_ping() {
 }
 
 #[test]
-fn unit_pong() {
+fn parse_pong() {
     assert_eq!(
         ServerControl::from_str("poNG\r\n").unwrap(),
         ServerControl::Pong
@@ -72,7 +111,7 @@ fn unit_pong() {
 }
 
 #[test]
-fn unit_ok() {
+fn parse_ok() {
     assert_eq!(
         ServerControl::from_str("+ok\r\n").unwrap(),
         ServerControl::Ok
@@ -84,7 +123,7 @@ fn unit_ok() {
 }
 
 #[test]
-fn unit_err() {
+fn parse_err() {
     let m = format!("-err '{}'\r\n", UNKNOWN_PROTOCOL_OPERATION);
     assert_eq!(
         ServerControl::from_str(&m).unwrap(),
@@ -179,7 +218,7 @@ fn unit_err() {
 }
 
 #[test]
-fn unit_fails() {
+fn parse_fails() {
     assert!(ServerControl::from_str("+ok").is_err());
     assert!(ServerControl::from_str("+err 'test'\r\n").is_err());
     assert!(ServerControl::from_str("some_random_text\r\n").is_err());

@@ -2,7 +2,7 @@ use super::*;
 use serde_json;
 
 #[test]
-fn unit_connect_serialization() {
+fn connect_serialization() {
     let connect = Connect {
         verbose: true,
         pedantic: false,

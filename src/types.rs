@@ -1,5 +1,5 @@
 mod address;
-mod error;
+pub mod error;
 mod parser;
 mod state;
 #[cfg(test)]
@@ -17,7 +17,6 @@ use crate::util;
 
 pub use self::{
     address::Address,
-    error::{RantsError, RantsResult},
     state::{ClientState, ConnectionState, StateTransition, StateTransitionResult},
 };
 
@@ -392,6 +391,11 @@ pub struct Subject {
 
 impl fmt::Display for Subject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Is the whole subject a full wildcard
+        if self.tokens.is_empty() {
+            write!(f, ">")?;
+            return Ok(());
+        }
         write!(f, "{}", self.tokens.join("."))?;
         if self.full_wildcard {
             write!(f, ".>")?;
@@ -404,10 +408,10 @@ impl fmt::Display for Subject {
 
 #[derive(Debug, PartialEq)]
 pub struct Msg {
-    pub subject: Subject,
-    pub sid: String,
-    pub reply_to: Option<Subject>,
-    pub payload: Vec<u8>,
+    pub(crate) subject: Subject,
+    pub(crate) sid: String,
+    pub(crate) reply_to: Option<Subject>,
+    pub(crate) payload: Vec<u8>,
 }
 
 impl Msg {
@@ -418,6 +422,10 @@ impl Msg {
             reply_to,
             payload,
         }
+    }
+
+    pub fn payload(self) -> Vec<u8> {
+        self.payload
     }
 }
 
@@ -432,11 +440,11 @@ pub struct Subscription {
     pub(crate) sid: Sid,
     pub(crate) queue_group: Option<String>,
     pub(crate) unsubscribe_after: Option<u64>,
-    pub(crate) tx: MpscSender<Vec<u8>>,
+    pub(crate) tx: MpscSender<Msg>,
 }
 
 impl Subscription {
-    pub fn new(subject: Subject, queue_group: Option<String>, tx: MpscSender<Vec<u8>>) -> Self {
+    pub fn new(subject: Subject, queue_group: Option<String>, tx: MpscSender<Msg>) -> Self {
         Self {
             subject,
             sid: SID.fetch_add(1, Ordering::Relaxed),

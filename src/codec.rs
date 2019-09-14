@@ -7,7 +7,10 @@ use std::{io, mem, str, usize};
 use tokio::codec::Decoder;
 
 use crate::{
-    types::{Msg, RantsError, RantsResult, ServerControl, ServerMessage, Subject},
+    types::{
+        error::{Error, Result},
+        Msg, ServerControl, ServerMessage, Subject,
+    },
     util::MESSAGE_TERMINATOR,
 };
 
@@ -41,13 +44,13 @@ impl Codec {
         }
     }
 
-    fn decode_impl(&mut self, buf: &mut BytesMut) -> RantsResult<ServerMessage> {
+    fn decode_impl(&mut self, buf: &mut BytesMut) -> Result<ServerMessage> {
         match &mut self.state {
             State::ReadMsgPayload { len, .. } => {
                 let len = *len;
                 // Check if the payload is complete
                 if buf.len() < len + MESSAGE_TERMINATOR.len() {
-                    return Err(RantsError::NotEnoughData);
+                    return Err(Error::NotEnoughData);
                 }
                 let line = buf.split_to(len + MESSAGE_TERMINATOR.len());
                 let terminator = &line[len..len + MESSAGE_TERMINATOR.len()];
@@ -56,7 +59,7 @@ impl Codec {
                 if terminator != MESSAGE_TERMINATOR.as_bytes() {
                     // We are in an invalid state. Try and recover by reading a control line.
                     self.state = State::ReadControl;
-                    return Err(RantsError::InvalidTerminator(terminator.to_vec()));
+                    return Err(Error::InvalidTerminator(terminator.to_vec()));
                 }
                 // This is messy, but it is pretty straightforward. We set `self.state` to
                 // `ReadControl` and then construct a `Msg` from the components of
@@ -118,25 +121,28 @@ impl Codec {
                     // We didn't find a line, so the next call will resume searching at the current
                     // end of the buffer.
                     self.next_index = buf.len();
-                    Err(RantsError::NotEnoughData)
+                    Err(Error::NotEnoughData)
                 }
             }
         }
     }
 }
 
-fn utf8(buf: &[u8]) -> Result<&str, io::Error> {
+fn utf8(buf: &[u8]) -> std::result::Result<&str, io::Error> {
     str::from_utf8(buf)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Unable to decode input as UTF8"))
 }
 
 impl Decoder for Codec {
     type Error = io::Error;
-    type Item = RantsResult<ServerMessage>;
+    type Item = Result<ServerMessage>;
 
-    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(
+        &mut self,
+        buf: &mut BytesMut,
+    ) -> std::result::Result<Option<Self::Item>, Self::Error> {
         let result = self.decode_impl(buf);
-        if let Err(RantsError::NotEnoughData) = result {
+        if let Err(Error::NotEnoughData) = result {
             return Ok(None);
         }
         Ok(Some(result))

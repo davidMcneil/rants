@@ -4,7 +4,7 @@ use super::*;
 use crate::{types::*, util::*};
 
 #[test]
-fn unit_decoder_simple() {
+fn decoder_simple() {
     let mut codec = Codec::new();
     let buf = &mut BytesMut::new();
     buf.reserve(1024);
@@ -52,7 +52,7 @@ fn unit_decoder_simple() {
 }
 
 #[test]
-fn unit_decoder_info() {
+fn decoder_info() {
     let mut codec = Codec::new();
     let buf = &mut BytesMut::new();
     buf.reserve(1024);
@@ -82,7 +82,7 @@ fn unit_decoder_info() {
 }
 
 #[test]
-fn unit_decoder_msg() {
+fn decoder_msg() {
     let mut codec = Codec::new();
     let buf = &mut BytesMut::new();
     buf.reserve(1024);

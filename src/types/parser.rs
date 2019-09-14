@@ -5,7 +5,7 @@ mod tests;
 
 use nom::{
     branch::alt,
-    bytes::complete::{tag, tag_no_case, take_until},
+    bytes::complete::{is_not, tag, tag_no_case, take_until},
     character::complete::{alphanumeric1, digit1, space1},
     combinator::{map_res, opt},
     multi::separated_nonempty_list,
@@ -16,25 +16,35 @@ use serde_json;
 use std::str::FromStr;
 
 use crate::{
-    types::{ProtocolError, RantsError, ServerControl, Subject},
+    types::{
+        error::{Error, Result},
+        ProtocolError, ServerControl, Subject,
+    },
     util,
 };
 
 impl FromStr for ServerControl {
-    type Err = RantsError;
+    type Err = Error;
 
-    fn from_str(s: &str) -> Result<Self, RantsError> {
-        let (_, control) =
-            control(s).map_err(|_| RantsError::InvalidServerControl(String::from(s)))?;
+    fn from_str(s: &str) -> Result<Self> {
+        let (_, control) = control(s).map_err(|_| Error::InvalidServerControl(String::from(s)))?;
+        // Check we used all the input
+        if s.len() > 0 {
+            return Err(Error::InvalidServerControl(String::from(s)));
+        }
         Ok(control)
     }
 }
 
 impl FromStr for Subject {
-    type Err = RantsError;
+    type Err = Error;
 
-    fn from_str(s: &str) -> Result<Self, RantsError> {
-        let (_, subject) = subject(s).map_err(|_| RantsError::InvalidSubject(String::from(s)))?;
+    fn from_str(s: &str) -> Result<Self> {
+        let (s, subject) = subject(s).map_err(|_| Error::InvalidSubject(String::from(s)))?;
+        // Check we used all the input
+        if s.len() > 0 {
+            return Err(Error::InvalidSubject(String::from(s)));
+        }
         Ok(subject)
     }
 }
@@ -55,24 +65,44 @@ fn info(input: &str) -> IResult<&str, ServerControl> {
 }
 
 fn token(input: &str) -> IResult<&str, &str> {
-    alt((alphanumeric1, tag(util::SUBJECT_WILDCARD)))(input)
+    alt((
+        is_not(util::SUBJECT_TOKEN_INVALID_CHARACTERS),
+        tag(util::SUBJECT_WILDCARD),
+    ))(input)
 }
 
 fn full_wildcard(input: &str) -> IResult<&str, &str> {
-    let (input, _) = tag(util::SUBJECT_TOKEN_DELIMITER)(input)?;
     tag(util::SUBJECT_FULL_WILDCARD)(input)
 }
 
-fn subject(input: &str) -> IResult<&str, Subject> {
+fn trailing_full_wildcard(input: &str) -> IResult<&str, &str> {
+    let (input, _) = tag(util::SUBJECT_TOKEN_DELIMITER)(input)?;
+    full_wildcard(input)
+}
+
+fn full_wildcard_subject(input: &str) -> IResult<&str, Subject> {
+    let (input, _) = full_wildcard(input)?;
+    let subject = Subject {
+        tokens: Vec::new(),
+        full_wildcard: true,
+    };
+    Ok((input, subject))
+}
+
+fn not_full_wildcard_subject(input: &str) -> IResult<&str, Subject> {
     let (input, tokens) =
         separated_nonempty_list(tag(util::SUBJECT_TOKEN_DELIMITER), token)(input)?;
-    let (input, full_wildcard) = opt(full_wildcard)(input)?;
+    let (input, full_wildcard) = opt(trailing_full_wildcard)(input)?;
     let tokens = tokens.iter().map(|s| String::from(*s)).collect();
     let subject = Subject {
         tokens,
         full_wildcard: full_wildcard.is_some(),
     };
     Ok((input, subject))
+}
+
+fn subject(input: &str) -> IResult<&str, Subject> {
+    alt((full_wildcard_subject, not_full_wildcard_subject))(input)
 }
 
 fn reply_to(input: &str) -> IResult<&str, Subject> {

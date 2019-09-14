@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const NATS_PROTOCOL: &str = "nats";
 pub const NATS_DEFAULT_PORT: u16 = 4222;
 pub const DEFAULT_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_CONNECT_SERIES_TRIES_BEFORE_COOL_DOWN: u64 = 3;
@@ -10,10 +9,18 @@ pub const DEFAULT_CONNECT_SERIES_DELAY: Duration = Duration::from_secs(5);
 pub const DEFAULT_COOL_DOWN: Duration = Duration::from_secs(60);
 pub const INBOX_PREFIX: &str = "_INBOX";
 
+// Address special characters
+pub const NATS_NETWORK_SCHEME: &str = "nats";
+pub const NETWORK_SCHEME_SEPARATOR: &str = "://";
+pub const AUTHORIZATION_SEPARATOR: &str = "@";
+pub const USERNAME_PASSWORD_SEPARATOR: &str = ":";
+pub const IP_ADDR_PORT_SEPARATOR: char = ':';
+
 // Subject special characters
 pub const SUBJECT_TOKEN_DELIMITER: &str = ".";
 pub const SUBJECT_WILDCARD: &str = "*";
 pub const SUBJECT_FULL_WILDCARD: &str = ">";
+pub const SUBJECT_TOKEN_INVALID_CHARACTERS: &str = " \t.*>";
 
 // Protocol op names
 pub const INFO_OP_NAME: &str = "INFO";
