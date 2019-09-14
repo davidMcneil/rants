@@ -71,7 +71,7 @@ fn parse_info() {
 fn parse_msg() {
     let s = Subject::from_str("FOO.BAR").unwrap();
     assert_eq!(
-        control("MSG FOO.BAR 9 1032\r\n").unwrap().1,
+        control_line("MSG FOO.BAR 9 1032\r\n").unwrap().1,
         ServerControl::Msg {
             subject: s,
             sid: String::from("9"),

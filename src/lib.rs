@@ -440,7 +440,7 @@ impl Client {
         // immediately unsubscribed from.
         // See https://github.com/nats-io/nats.go/issues/294 for a different implementation.
         let inbox_uuid = Uuid::new_v4();
-        let reply_to = format!("{}.{}", util::INBOX_PREFIX, inbox_uuid).parse()?;
+        let reply_to = format!("{}.{}", util::INBOX_PREFIX, inbox_uuid.to_simple()).parse()?;
         let mut rx = {
             let mut client = wrapped_client.lock().await;
             let (sid, rx) = client.subscribe(&reply_to, 1).await?;

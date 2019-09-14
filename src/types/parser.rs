@@ -27,7 +27,8 @@ impl FromStr for ServerControl {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        let (_, control) = control(s).map_err(|_| Error::InvalidServerControl(String::from(s)))?;
+        let (s, control) =
+            control_line(s).map_err(|_| Error::InvalidServerControl(String::from(s)))?;
         // Check we used all the input
         if s.len() > 0 {
             return Err(Error::InvalidServerControl(String::from(s)));
@@ -51,9 +52,9 @@ impl FromStr for Subject {
 
 // Nom parser combinators
 
-fn control(input: &str) -> IResult<&str, ServerControl> {
+fn control_line(input: &str) -> IResult<&str, ServerControl> {
     let (input, control) = alt((info, msg, ping, pong, plus_ok, minus_err))(input)?;
-    tag(util::MESSAGE_TERMINATOR)(input)?;
+    let (input, _) = tag(util::MESSAGE_TERMINATOR)(input)?;
     Ok((input, control))
 }
 

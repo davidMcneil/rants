@@ -427,6 +427,10 @@ impl Msg {
     pub fn payload(self) -> Vec<u8> {
         self.payload
     }
+
+    pub fn reply_to(&self) -> Option<&Subject> {
+        self.reply_to.as_ref()
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
