@@ -1,3 +1,5 @@
+//! Some documentation
+
 mod codec;
 #[cfg(test)]
 mod tests;
@@ -41,27 +43,52 @@ use crate::{
     codec::Codec,
     error::{Error, Result},
     types::{
-        Address, ClientControl, Connect, ConnectionState, Info, ProtocolError, ServerMessage, Sid,
-        StateTransition, StateTransitionResult, Subscription,
+        ClientControl, ConnectionState, ServerMessage, StateTransition, StateTransitionResult,
+        Subscription,
     },
 };
 
-pub use crate::types::{error, ClientState, Msg, Subject};
+pub use crate::types::{
+    error, Address, Authorization, ClientState, Connect, Info, Msg, ProtocolError, Sid, Subject,
+};
 
+/// The type of a [`Client`](struct.Client.html)'s [`delay_generator`](struct.Client.html#method.delay_generator).
+///
+/// # Arguments
+/// * `client` - A reference to the `Client` that is trying to connect
+/// * `attempts` - The number of previous connect attempts
+/// * `addresses` - The number of addresses the `Client` is aware of
 pub type DelayGenerator = Box<dyn Fn(Arc<Mutex<Client>>, u64, u64) -> Duration + Send>;
 
+/// Generate a [`Client`](struct.Client.html)'s [`delay_generator`](struct.Client.html#method.delay_generator).
+///
+/// A `Client`s `delay_generator` provides complete flexibility in determining delays between
+/// connect attempts. However, often a reasonable `delay_generator` can be produced by defining
+/// the few values required by this function.
+///
+/// # Arguments
+///
+/// * `connect_series_attempts_before_cool_down` - A `connect_series` is an attempt to try all
+/// addresses: those explicitly [specified](struct.Client.html#method.addresses_mut) and
+/// those received in an `INFO` messages's [`connect_urls`](struct.Info.html#method.connect_urls).
+/// This variable defines how many `connect_series` to try before delaying for the `cool_down`
+/// duration
+/// * `connect_delay` - The delay between each connect attempt.
+/// * `connect_series_delay` - The delay after a complete `connect_series`.
+/// * `cool_down_delay` - The delay after completing `connect_series_attempts_before_cool_down`
+/// attempts.
 pub fn generate_delay_generator(
-    connect_series_tries_before_cool_down: u64,
+    connect_series_attempts_before_cool_down: u64,
     connect_delay: Duration,
     connect_series_delay: Duration,
     cool_down: Duration,
 ) -> DelayGenerator {
     Box::new(
-        move |_: Arc<Mutex<Client>>, connect_try: u64, addresses: u64| {
-            if connect_try % (addresses * connect_series_tries_before_cool_down) == 0 {
+        move |_: Arc<Mutex<Client>>, connect_attempts: u64, addresses: u64| {
+            if connect_attempts % (addresses * connect_series_attempts_before_cool_down) == 0 {
                 trace!("Using cool down delay {}s", cool_down.as_secs_f32());
                 cool_down
-            } else if connect_try % addresses == 0 {
+            } else if connect_attempts % addresses == 0 {
                 trace!(
                     "Using connect series delay {}s",
                     connect_series_delay.as_secs_f32()
@@ -98,12 +125,20 @@ pub struct Client {
 }
 
 impl Client {
-    /// Create a new `Client` with a default [Connect](struct.Connect.html).
+    /// Create a new `Client` with a default [`Connect`](struct.Connect.html).
+    ///
+    /// # Arguments
+    ///
+    /// * `addresses` - the list of addresses to try and establish a connection to a server
     pub fn new(addresses: Vec<Address>) -> Arc<Mutex<Self>> {
         Self::with_connect(addresses, Connect::new())
     }
 
-    /// Create a new `Client` with the provided [Connect](struct.Connect.html).
+    /// Create a new `Client` with the provided [`Connect`](struct.Connect.html).
+    ///
+    /// # Arguments
+    ///
+    /// * `addresses` - the list of addresses to try and establish a connection to a server
     pub fn with_connect(addresses: Vec<Address>, connect: Connect) -> Arc<Mutex<Self>> {
         let state = ConnectionState::Disconnected;
         let (state_tx, state_rx) = watch::channel((&state).into());
@@ -130,7 +165,7 @@ impl Client {
             err_rx,
             tcp_connect_timeout: util::DEFAULT_TCP_CONNECT_TIMEOUT,
             delay_generator: generate_delay_generator(
-                util::DEFAULT_CONNECT_SERIES_TRIES_BEFORE_COOL_DOWN,
+                util::DEFAULT_CONNECT_SERIES_ATTEMPTS_BEFORE_COOL_DOWN,
                 util::DEFAULT_CONNECT_DELAY,
                 util::DEFAULT_CONNECT_SERIES_DELAY,
                 util::DEFAULT_COOL_DOWN,
@@ -149,44 +184,60 @@ impl Client {
         self.state_rx.clone()
     }
 
-    /// Get a copy of to the most recent [Info](struct.Connect.html) sent from the server.
+    /// Get a the most recent [`Info`](struct.Info.html) sent from the server.
     pub fn info(&self) -> Info {
         self.info_rx.get_ref().clone()
     }
 
-    /// Get a mutable reference to the current [Connect](struct.Connect.html) for this client.
+    /// Get a mutable reference to this `Client`'s [`Connect`](struct.Connect.html).
     pub fn connect_mut(&mut self) -> &mut Connect {
         &mut self.connect
     }
 
-    // Get a mutable reference to the list of addresses we try to connect to
+    /// Get a mutable reference to the list of addresses used to try and establish a connection to a
+    /// server.
     pub fn addresses_mut(&mut self) -> &mut [Address] {
         &mut self.addresses
     }
 
-    // Get the configured TCP connect timeout
+    /// Get the configured TCP connect timeout. [default = `10s`]
+    ///
+    /// This is the timeout of a single connect attempt. It is not the timeout of the
+    /// [`connect`](struct.Client.html#method.connect) future which has no internal timeout.
     pub fn tcp_connect_timeout(&self) -> Duration {
         self.tcp_connect_timeout
     }
 
-    // Set the TCP connect timeout
+    /// Set the TCP connect timeout.
     pub fn set_tcp_connect_timeout(&mut self, tcp_connect_timeout: Duration) -> &mut Self {
         self.tcp_connect_timeout = tcp_connect_timeout;
         self
     }
 
-    // TODO: comments
+    /// Get the [`DelayGenerator`](type.DelayGenerator.html)
+    ///
+    /// The default generator is generated with [`generate_delay_generator`](function.generate_delay_generator.html)
+    /// with the following parameters:
+    ///
+    /// * `connect_series_attempts_before_cool_down` = `3`
+    /// * `connect_delay` = `0s`
+    /// * `connect_series_delay` = `5s`
+    /// * `cool_down` = `60s`
     pub fn delay_generator(&mut self) -> &DelayGenerator {
         &self.delay_generator
     }
 
-    // TODO: comments
+    /// Set the [`DelayGenerator`](type.DelayGenerator.html)
     pub fn set_delay_generator(&mut self, delay_generator: DelayGenerator) -> &mut Self {
         self.delay_generator = delay_generator;
         self
     }
 
-    /// Send a connect message to the server using the current [Connect](struct.Connect.html).
+    /// Send a `CONNECT` message to the server using the configured [`Connect`](struct.Connect.html).
+    ///
+    /// **Note**: [`connect`](struct.Client.html#method.connect) automatically sends a `CONNECT`
+    /// message. This is only needed in the case that you want to change the connection parameters
+    /// after already establishing a connection.
     pub async fn send_connect(&mut self) -> Result<()> {
         if let ConnectionState::Connected(address, writer) = &mut self.state {
             Self::send_connect_with_writer(writer, &self.connect, address).await
@@ -219,25 +270,25 @@ impl Client {
             (addresses_len, addresses.into_iter().cycle())
         };
 
-        let mut connect_try = 0;
+        let mut connect_attempts = 0;
         loop {
             // Effectively move the delay logic after we try a connect, but keep it at the start
             // of the loop so we do not have to do it before every continue statement.
-            if connect_try != 0 {
+            if connect_attempts != 0 {
                 let delay = (wrapped_client.lock().await.delay_generator)(
                     Arc::clone(&wrapped_client),
-                    connect_try,
+                    connect_attempts,
                     addresses_len,
                 );
                 debug!(
-                    "Delaying for {}s after {} connect tries with {} addresses",
+                    "Delaying for {}s after {} connect attempts with {} addresses",
                     delay.as_secs_f32(),
-                    connect_try,
+                    connect_attempts,
                     addresses_len
                 );
                 timer::delay(Instant::now() + delay).await;
             }
-            connect_try += 1;
+            connect_attempts += 1;
 
             let mut client = wrapped_client.lock().await;
 
@@ -669,7 +720,7 @@ impl Client {
             }
             ServerMessage::Msg(msg) => {
                 // Parse the sid
-                let sid_str = &msg.sid;
+                let sid_str = &msg.sid();
                 let sid_result = sid_str.parse::<Sid>();
                 let sid = match sid_result {
                     Ok(sid) => sid,
@@ -703,7 +754,7 @@ impl Client {
                     }
                 };
                 // Try and send the message to the subscription receiver
-                let subject = msg.subject.clone();
+                let subject = msg.subject().clone();
                 if let Err(e) = subscription.tx.try_send(msg) {
                     // If we could not send because the receiver is closed, we no longer
                     // care about this subscription and should unsubscribe
@@ -804,7 +855,7 @@ impl Client {
     ) -> Result<()> {
         let mut connect = connect.clone();
         // If the address has authorization information, override the default authorization
-        if let Some(authorization) = &address.authorization {
+        if let Some(authorization) = address.authorization() {
             connect.set_authorization(Some(authorization.clone()));
         }
         Self::write_line(writer, ClientControl::Connect(&connect)).await?;

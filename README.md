@@ -9,7 +9,10 @@ A rust [NATS](https://nats.io/) messaging client.
 - [ ] Support improved request reply. See https://github.com/nats-io/nats.go/issues/294.
 - [ ] Benchmarks and performance considerations
 
-- Polish public interface
+- Document ClientState
+- Make sid always be u64
+- Make subscription stand alone type
 - Return subscriptions hashmap
+- Unsubscribe all
 - Unsubscribe test
-- Add comments
+- Examine locking patterns

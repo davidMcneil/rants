@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn delay_generator() {
     let delay_generator = generate_delay_generator(
-        util::DEFAULT_CONNECT_SERIES_TRIES_BEFORE_COOL_DOWN,
+        util::DEFAULT_CONNECT_SERIES_ATTEMPTS_BEFORE_COOL_DOWN,
         util::DEFAULT_CONNECT_DELAY,
         util::DEFAULT_CONNECT_SERIES_DELAY,
         util::DEFAULT_COOL_DOWN,

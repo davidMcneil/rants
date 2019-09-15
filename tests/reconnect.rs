@@ -26,8 +26,8 @@ async fn main() {
         client.publish(&subject, &[2]).await.unwrap();
     }
 
-    assert_eq!(subscription.next().await.unwrap().payload(), &[1]);
-    assert_eq!(subscription.next().await.unwrap().payload(), &[2]);
+    assert_eq!(subscription.next().await.unwrap().into_payload(), &[1]);
+    assert_eq!(subscription.next().await.unwrap().into_payload(), &[2]);
 
     // Disconnect
     Client::disconnect(Arc::clone(&wrapped_client)).await;

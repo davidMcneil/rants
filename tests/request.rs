@@ -23,7 +23,7 @@ async fn main() {
         };
         let request = subscription.next().await.unwrap();
         let reply_to = request.reply_to().unwrap().clone();
-        let request = String::from_utf8(request.payload()).unwrap();
+        let request = String::from_utf8(request.into_payload()).unwrap();
         assert_eq!(&request, "the request");
         let mut client = wrapped_client_copy.lock().await;
         client.publish(&reply_to, b"the reply").await.unwrap();
@@ -33,7 +33,7 @@ async fn main() {
     let reply = Client::request(Arc::clone(&wrapped_client), &subject, b"the request")
         .await
         .unwrap();
-    let reply = String::from_utf8(reply.payload()).unwrap();
+    let reply = String::from_utf8(reply.into_payload()).unwrap();
     assert_eq!(&reply, "the reply");
 
     Client::disconnect(wrapped_client).await;

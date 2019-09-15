@@ -44,7 +44,7 @@ async fn main() {
     let mut messages = subscription
         .take(number_of_messages as u64)
         .map(|msg| {
-            String::from_utf8(msg.payload())
+            String::from_utf8(msg.into_payload())
                 .unwrap()
                 .parse::<usize>()
                 .unwrap()

@@ -22,15 +22,7 @@ pub use self::{
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-/// As soon as the server accepts a connection from the client, it will send information about
-/// itself and the configuration and security requirements that are necessary for the client to
-/// successfully authenticate with the server and exchange messages.
-///
-/// When using the updated client protocol (see CONNECT below), INFO messages can be sent anytime
-/// by the server. This means clients with that protocol level need to be able to asynchronously
-/// handle INFO messages.
-///
-/// https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#info  
+/// The [`INFO`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#info) message sent by the server
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct Info {
     pub(crate) server_id: String,
@@ -127,13 +119,16 @@ impl Info {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
+/// The possible methods of client authorization set in the [`Connect`](struct.Connect.html) message.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Authorization {
+    /// Use the `auth_token` authorization method
     Token {
         #[serde(rename = "auth_token")]
         token: String,
     },
+    /// Use the `user` and `pass` authorization method
     UsernamePassword {
         #[serde(rename = "user")]
         username: String,
@@ -143,10 +138,12 @@ pub enum Authorization {
 }
 
 impl Authorization {
+    /// Create a `Authorization::token`
     pub fn token(token: String) -> Self {
         Authorization::Token { token }
     }
 
+    /// Create a `Authorization::UsernamePassword`
     pub fn username_password(username: String, password: String) -> Self {
         Authorization::UsernamePassword { username, password }
     }
@@ -164,12 +161,7 @@ impl fmt::Display for Authorization {
     }
 }
 
-/// The CONNECT message is the client version of the INFO message. Once the client has established
-/// a TCP/IP socket connection with the NATS server, and an INFO message has been received from the
-/// server, the client may send a CONNECT message to the NATS server to provide more information
-/// about the current connection as well as security information.
-///
-/// https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#connect
+/// The [`CONNECT`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#connect) message sent by the client
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Connect {
     verbose: bool,
@@ -225,16 +217,19 @@ impl Connect {
         self
     }
 
+    /// Get the [`Authorization`](enum.Authorization.html)
+    pub fn authorization(&self) -> Option<&Authorization> {
+        self.authorization.as_ref()
+    }
+
     /// Set the authorization to use a token
     pub fn token(&mut self, token: String) -> &mut Self {
-        self.authorization = Some(Authorization::token(token));
-        self
+        self.set_authorization(Some(Authorization::token(token)))
     }
 
     /// Set the authorization to use a username and password
     pub fn username_password(&mut self, username: String, password: String) -> &mut Self {
-        self.authorization = Some(Authorization::username_password(username, password));
-        self
+        self.set_authorization(Some(Authorization::username_password(username, password)))
     }
 
     /// Set the authorization
@@ -243,10 +238,9 @@ impl Connect {
         self
     }
 
-    /// Remove all authorization.
+    /// Remove the authorization
     pub fn clear_authorization(&mut self) -> &mut Self {
-        self.authorization = None;
-        self
+        self.set_authorization(None)
     }
 
     /// Get the optional name of the client.
@@ -317,23 +311,48 @@ impl Default for Connect {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-/// https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#okerr
+/// The possible [`-ERR`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#okerr) messages sent from the server.
 #[derive(Debug, PartialEq)]
 pub enum ProtocolError {
+    /// Unknown protocol error
     UnknownProtocolOperation,
+    /// Client attempted to connect to a route port instead of the client port
     AttemptedToConnectToRoutePort,
+    /// Client failed to authenticate to the server with credentials specified in the CONNECT
+    /// message
     AuthorizationViolation,
+    /// Client took too long to authenticate to the server after establishing a connection
+    /// (default 1 second)
     AuthorizationTimeout,
+    /// Client specified an invalid protocol version in the CONNECT message
     InvalidClientProtocol,
+    /// Message destination subject and reply subject length exceeded the maximum control line
+    /// value specified by the max_control_line server option. The default is 1024 bytes.
     MaximumControlLineExceeded,
+    /// Cannot parse the protocol message sent by the client
     ParserError,
+    /// The server requires TLS and the client does not have TLS enabled.
     SecureConnectionTlsRequired,
+    /// The server hasn't received a message from the client, including a PONG in too long.
     StaleConnection,
+    /// This error is sent by the server when creating a new connection and the server has exceeded
+    /// the maximum number of connections specified by the max_connections server option. The
+    /// default is 64k.
     MaximumConnectionsExceeded,
+    /// The server pending data size for the connection has reached the maximum size (default 10MB).
     SlowConsumer,
+    /// Client attempted to publish a message with a payload size that exceeds the max_payload size
+    /// configured on the server. This value is supplied to the client upon connection in the
+    /// initial INFO message. The client is expected to do proper accounting of byte size to be
+    /// sent to the server in order to handle this error synchronously.
     MaximumPayloadViolation,
+    /// Client sent a malformed subject (e.g. sub foo. 90)
     InvalidSubject,
+    /// The user specified in the CONNECT message does not have permission to subscribe to the
+    /// subject.
     PermissionsViolationForSubscription(Subject),
+    /// The user specified in the CONNECT message does not have permissions to publish to the
+    /// subject.
     PermissionsViolationForPublish(Subject),
 }
 
@@ -383,6 +402,17 @@ impl fmt::Display for ProtocolError {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
+/// A [subject](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#protocol-conventions) to publish or subscribe to
+///
+/// `Subject`s can only be created by parsing a string.
+///
+/// # Example
+///  ```
+/// use rants::Subject;
+///
+/// let subject = "foo.bar.*.>".parse::<Subject>();
+/// assert!(subject.is_ok());
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct Subject {
     tokens: Vec<String>,
@@ -406,16 +436,22 @@ impl fmt::Display for Subject {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
+/// The [`MSG`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#msg) message sent by the server
 #[derive(Debug, PartialEq)]
 pub struct Msg {
-    pub(crate) subject: Subject,
-    pub(crate) sid: String,
-    pub(crate) reply_to: Option<Subject>,
-    pub(crate) payload: Vec<u8>,
+    subject: Subject,
+    sid: String,
+    reply_to: Option<Subject>,
+    payload: Vec<u8>,
 }
 
 impl Msg {
-    pub fn new(subject: Subject, sid: String, reply_to: Option<Subject>, payload: Vec<u8>) -> Self {
+    pub(crate) fn new(
+        subject: Subject,
+        sid: String,
+        reply_to: Option<Subject>,
+        payload: Vec<u8>,
+    ) -> Self {
         Self {
             subject,
             sid,
@@ -424,18 +460,44 @@ impl Msg {
         }
     }
 
-    pub fn payload(self) -> Vec<u8> {
-        self.payload
+    /// Get the [`Subject`](struct.Subject.html)
+    pub fn subject(&self) -> &Subject {
+        &self.subject
     }
 
+    /// Get the subscription id
+    ///
+    /// **Note:** This is of type `&str` instead of type [`Sid`](struct.Sid.html) because the sid
+    /// returned by the server can be any ASCII string. However, in reality, the only messages
+    /// received by the client should have sids produced by the client and so they should always
+    /// be parsable as type [`Sid`](struct.Sid.html).
+    pub fn sid(&self) -> &str {
+        &self.sid
+    }
+
+    /// Get the reply to [`Subject`](struct.Subject.html)
     pub fn reply_to(&self) -> Option<&Subject> {
         self.reply_to.as_ref()
+    }
+
+    /// Get the payload
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
+    /// Take ownership of the payload
+    pub fn into_payload(self) -> Vec<u8> {
+        self.payload
     }
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-// A subscription id can really be any alphanumeric string but within this library we only use u64s
+/// The type used for subscription IDs.
+///
+/// This is a unique identifier the client uses when routing messages from the server. A
+/// subscription ID can be any ASCII string but within this client library we always use
+/// the string representation of an atomically increasing `u64` counter.
 pub type Sid = u64;
 static SID: AtomicU64 = AtomicU64::new(0);
 

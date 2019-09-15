@@ -1,16 +1,49 @@
 use serde::{de, Deserialize, Deserializer};
-use std::{convert::Infallible, fmt, net::SocketAddr, str::FromStr};
+use std::{
+    convert::Infallible,
+    fmt,
+    net::{AddrParseError, SocketAddr},
+    str::FromStr,
+};
 
 use super::Authorization;
 use crate::{types::error::Error, util};
 
+/// An address used to connect to a server
+///
+/// An `Address` consists of an [`Authorization`](enum.Authorization.html) and a `SocketAddr`.
+///
+/// The string representation of an `Address` can take the following forms:
+/// * `nats://<username>:<password>@<ip_address>:<port>`
+/// * `nats://<token>@<ip_address>:<port>`
+///
+/// The only required part of the address string is the `<ip_address>`. This makes the simplest
+/// address solely an IP address (eg `127.0.0.1`). If no port is specified the default, port `4222`,
+///  is used. Some example addresses include:
+///
+/// **Note**: When a client attempts to connect to the server at an address, the authorization
+/// specified by the address will always override the client's `Connect` default
+/// [`authorization`](struct.Connect.html#method.authorization).
+///
+/// # Example
+///  ```
+/// use rants::Address;
+///
+/// let address = "nats://username:password@127.0.0.1:8080".parse::<Address>();
+/// assert!(address.is_ok());
+/// let address = "auth_token@1.2.3.4".parse::<Address>();
+/// assert!(address.is_ok());
+/// let address = "nats://auth_token@1.2.3.4:5780".parse::<Address>();
+/// assert!(address.is_ok());
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct Address {
     address: SocketAddr,
-    pub(crate) authorization: Option<Authorization>,
+    authorization: Option<Authorization>,
 }
 
 impl Address {
+    /// Create a new `Address`
     pub fn new(address: SocketAddr, authorization: Option<Authorization>) -> Self {
         Self {
             address,
@@ -18,8 +51,14 @@ impl Address {
         }
     }
 
+    /// Get the `Address`'s `SocketAddr`
     pub fn address(&self) -> SocketAddr {
         self.address
+    }
+
+    /// Get the `Address`'s [`Authorization`](enum.Authorization.html)
+    pub fn authorization(&self) -> Option<&Authorization> {
+        self.authorization.as_ref()
     }
 }
 
@@ -56,6 +95,16 @@ impl FromStr for Authorization {
     }
 }
 
+fn parse_ip_and_maybe_port(s: &str) -> std::result::Result<SocketAddr, AddrParseError> {
+    // If the string to parse does not contain a ':', it does not have a port
+    Ok(if s.contains(util::IP_ADDR_PORT_SEPARATOR) {
+        s.parse()?
+    } else {
+        let ip = s.parse()?;
+        SocketAddr::new(ip, util::NATS_DEFAULT_PORT)
+    })
+}
+
 impl FromStr for Address {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -68,14 +117,10 @@ impl FromStr for Address {
         }
         // Split apart the authorization and the address
         let (maybe_authorization, ip_and_maybe_port) = split_once(s, util::AUTHORIZATION_SEPARATOR);
-        // Parse the address. If it does not contain a ':', it does not have a port
-        let address = if ip_and_maybe_port.contains(util::IP_ADDR_PORT_SEPARATOR) {
-            ip_and_maybe_port.parse()?
-        } else {
-            let ip = ip_and_maybe_port.parse()?;
-            SocketAddr::new(ip, util::NATS_DEFAULT_PORT)
-        };
-        let authorization = maybe_authorization.map(|s| s.parse().expect("parse authorization"));
+        let address = parse_ip_and_maybe_port(ip_and_maybe_port)
+            .map_err(|_| Error::InvalidAddress(String::from(s)))?;
+        let authorization =
+            maybe_authorization.map(|s| s.parse().expect("parsing authorization is infallible"));
         Ok(Address {
             address,
             authorization,
