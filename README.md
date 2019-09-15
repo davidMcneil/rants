@@ -10,8 +10,6 @@ A rust [NATS](https://nats.io/) messaging client.
 - [ ] Benchmarks and performance considerations
 
 - Document ClientState
-- Make subscription stand alone type
-- Return subscriptions hashmap
 - Unsubscribe all
 - Unsubscribe test
 - Examine locking patterns

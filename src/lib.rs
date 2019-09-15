@@ -44,12 +44,12 @@ use crate::{
     error::{Error, Result},
     types::{
         ClientControl, ConnectionState, ServerMessage, StateTransition, StateTransitionResult,
-        Subscription,
     },
 };
 
 pub use crate::types::{
     error, Address, Authorization, ClientState, Connect, Info, Msg, ProtocolError, Sid, Subject,
+    Subscription,
 };
 
 /// The type of a [`Client`](struct.Client.html)'s [`delay_generator`](struct.Client.html#method.delay_generator).
@@ -233,6 +233,11 @@ impl Client {
         self
     }
 
+    /// TODO
+    pub fn subscriptions(&self) -> impl Iterator<Item = (&Sid, &Subscription)> {
+        self.subscriptions.iter()
+    }
+
     /// Send a `CONNECT` message to the server using the configured [`Connect`](struct.Connect.html).
     ///
     /// **Note**: [`connect`](struct.Client.html#method.connect) automatically sends a `CONNECT`
@@ -385,7 +390,9 @@ impl Client {
                 {
                     error!(
                         "Failed to resubscribe to sid '{}' with subject '{}', err: {}",
-                        sid, subscription.subject, e
+                        sid,
+                        subscription.subject(),
+                        e
                     );
                     failed_to_resubscribe.push(*sid);
                 }
@@ -537,7 +544,7 @@ impl Client {
             let subscription =
                 Subscription::new(subject.clone(), queue_group.map(String::from), tx);
             Self::write_line(writer, ClientControl::Sub(&subscription)).await?;
-            let sid = subscription.sid;
+            let sid = subscription.sid();
             self.subscriptions.insert(sid, subscription);
             Ok((sid, rx))
         } else {
@@ -577,6 +584,19 @@ impl Client {
         } else {
             Err(Error::NotConnected)
         }
+    }
+
+    /// TODO: comments
+    pub async fn unsubscribe_all(&mut self) -> Result<()> {
+        let sids = self
+            .subscriptions()
+            .map(|(sid, _)| *sid)
+            .collect::<Vec<_>>();
+        // TODO: parallelize
+        for sid in sids {
+            self.unsubscribe(sid).await?;
+        }
+        Ok(())
     }
 
     /// Get a watch stream of all received `INFO` messages.
@@ -763,7 +783,7 @@ impl Client {
                     }
                 }
                 // If we have received all the messages we were waiting for, unsubscribe
-                if let Some(unsubscribe_after) = &mut subscription.unsubscribe_after {
+                if let Some(unsubscribe_after) = &mut subscription.unsubscribe_after() {
                     *unsubscribe_after -= 1;
                     if *unsubscribe_after == 0 {
                         client.subscriptions.remove(&sid);

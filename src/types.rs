@@ -497,15 +497,15 @@ pub type Sid = u64;
 static SID: AtomicU64 = AtomicU64::new(0);
 
 pub struct Subscription {
-    pub(crate) subject: Subject,
-    pub(crate) sid: Sid,
-    pub(crate) queue_group: Option<String>,
+    subject: Subject,
+    sid: Sid,
+    queue_group: Option<String>,
     pub(crate) unsubscribe_after: Option<u64>,
     pub(crate) tx: MpscSender<Msg>,
 }
 
 impl Subscription {
-    pub fn new(subject: Subject, queue_group: Option<String>, tx: MpscSender<Msg>) -> Self {
+    pub(crate) fn new(subject: Subject, queue_group: Option<String>, tx: MpscSender<Msg>) -> Self {
         Self {
             subject,
             sid: SID.fetch_add(1, Ordering::Relaxed),
@@ -513,6 +513,22 @@ impl Subscription {
             unsubscribe_after: None,
             tx,
         }
+    }
+
+    pub fn subject(&self) -> &Subject {
+        &self.subject
+    }
+
+    pub fn sid(&self) -> Sid {
+        self.sid
+    }
+
+    pub fn queue_group(&self) -> Option<&str> {
+        self.queue_group.as_ref().map(String::as_ref)
+    }
+
+    pub fn unsubscribe_after(&self) -> Option<u64> {
+        self.unsubscribe_after
     }
 }
 
@@ -612,9 +628,9 @@ impl fmt::Display for ClientControl<'_> {
                         f,
                         "{} {} {} {}{}",
                         util::SUB_OP_NAME,
-                        subscription.subject,
+                        subscription.subject(),
                         queue_group,
-                        subscription.sid,
+                        subscription.sid(),
                         util::MESSAGE_TERMINATOR
                     )
                 } else {
@@ -622,8 +638,8 @@ impl fmt::Display for ClientControl<'_> {
                         f,
                         "{} {} {}{}",
                         util::SUB_OP_NAME,
-                        subscription.subject,
-                        subscription.sid,
+                        subscription.subject(),
+                        subscription.sid(),
                         util::MESSAGE_TERMINATOR
                     )
                 }
