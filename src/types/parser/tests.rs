@@ -74,7 +74,7 @@ fn parse_msg() {
         control_line("MSG FOO.BAR 9 1032\r\n").unwrap().1,
         ServerControl::Msg {
             subject: s,
-            sid: String::from("9"),
+            sid: 9,
             reply_to: None,
             len: 1032,
         }
@@ -86,7 +86,7 @@ fn parse_msg() {
         ServerControl::from_str("MSG FOO.BAR 9 INBOX.34 11\r\n").unwrap(),
         ServerControl::Msg {
             subject: s,
-            sid: String::from("9"),
+            sid: 9,
             reply_to: Some(s2),
             len: 11,
         }

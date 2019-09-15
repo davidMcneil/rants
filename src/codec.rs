@@ -9,7 +9,7 @@ use tokio::codec::Decoder;
 use crate::{
     types::{
         error::{Error, Result},
-        Msg, ServerControl, ServerMessage, Subject,
+        Msg, ServerControl, ServerMessage, Sid, Subject,
     },
     util::MESSAGE_TERMINATOR,
 };
@@ -20,7 +20,7 @@ enum State {
     /// We are currently reading the payload of a `Msg` message.
     ReadMsgPayload {
         subject: Subject,
-        sid: String,
+        sid: Sid,
         reply_to: Option<Subject>,
         len: usize,
     },

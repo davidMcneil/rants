@@ -100,7 +100,7 @@ fn decoder_msg() {
         codec.decode(buf).unwrap().unwrap().unwrap(),
         ServerMessage::Msg(Msg::new(
             Subject::from_str("test").unwrap(),
-            String::from("0"),
+            0,
             None,
             b"hello world!".to_vec()
         ))
@@ -109,7 +109,7 @@ fn decoder_msg() {
         codec.decode(buf).unwrap().unwrap().unwrap(),
         ServerMessage::Msg(Msg::new(
             Subject::from_str("test").unwrap(),
-            String::from("0"),
+            0,
             None,
             b"short".to_vec()
         ))
@@ -118,7 +118,7 @@ fn decoder_msg() {
         codec.decode(buf).unwrap().unwrap().unwrap(),
         ServerMessage::Msg(Msg::new(
             Subject::from_str("test").unwrap(),
-            String::from("0"),
+            0,
             None,
             b"".to_vec()
         ))
@@ -137,7 +137,7 @@ fn decoder_msg() {
         codec.decode(buf).unwrap().unwrap().unwrap(),
         ServerMessage::Msg(Msg::new(
             Subject::from_str("test").unwrap(),
-            String::from("0"),
+            0,
             Some(Subject::from_str("reply").unwrap()),
             b"hello\r\nworld!".to_vec()
         ))

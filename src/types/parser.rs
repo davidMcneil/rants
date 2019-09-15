@@ -6,7 +6,7 @@ mod tests;
 use nom::{
     branch::alt,
     bytes::complete::{is_not, tag, tag_no_case, take_until},
-    character::complete::{alphanumeric1, digit1, space1},
+    character::complete::{digit1, space1},
     combinator::{map_res, opt},
     multi::separated_nonempty_list,
     sequence::delimited,
@@ -18,7 +18,7 @@ use std::str::FromStr;
 use crate::{
     types::{
         error::{Error, Result},
-        ProtocolError, ServerControl, Subject,
+        ProtocolError, ServerControl, Sid, Subject,
     },
     util,
 };
@@ -117,7 +117,9 @@ fn msg(input: &str) -> IResult<&str, ServerControl> {
     let (input, _) = space1(input)?;
     let (input, subject) = subject(input)?;
     let (input, _) = space1(input)?;
-    let (input, sid) = alphanumeric1(input)?;
+    // Technically, the subscription ID can be any ASCII string, but this client only uses
+    // subscription IDs of type `Sid`.
+    let (input, sid) = map_res(digit1, |s: &str| s.parse::<Sid>())(input)?;
     let (input, _) = space1(input)?;
     let (input, reply_to) = opt(reply_to)(input)?;
     let (input, len) = map_res(digit1, |s: &str| s.parse::<u64>())(input)?;
@@ -125,7 +127,7 @@ fn msg(input: &str) -> IResult<&str, ServerControl> {
         input,
         ServerControl::Msg {
             subject,
-            sid: String::from(sid),
+            sid,
             reply_to,
             len,
         },

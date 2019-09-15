@@ -719,19 +719,7 @@ impl Client {
                 wrapped_client.lock().await.handle_info_message(info);
             }
             ServerMessage::Msg(msg) => {
-                // Parse the sid
-                let sid_str = &msg.sid();
-                let sid_result = sid_str.parse::<Sid>();
-                let sid = match sid_result {
-                    Ok(sid) => sid,
-                    Err(_) => {
-                        // This should never happen as the only sid this client uses is of type
-                        // `Sid`
-                        error!("Received unknown sid '{}'", sid_str);
-                        debug_assert!(false);
-                        return;
-                    }
-                };
+                let sid = msg.sid();
                 let mut client = wrapped_client.lock().await;
                 // Try and lookup the subscription from the sid
                 let subscription = match client.subscriptions.get_mut(&sid) {

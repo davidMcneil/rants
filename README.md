@@ -10,7 +10,6 @@ A rust [NATS](https://nats.io/) messaging client.
 - [ ] Benchmarks and performance considerations
 
 - Document ClientState
-- Make sid always be u64
 - Make subscription stand alone type
 - Return subscriptions hashmap
 - Unsubscribe all

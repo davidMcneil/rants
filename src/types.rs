@@ -440,7 +440,7 @@ impl fmt::Display for Subject {
 #[derive(Debug, PartialEq)]
 pub struct Msg {
     subject: Subject,
-    sid: String,
+    sid: Sid,
     reply_to: Option<Subject>,
     payload: Vec<u8>,
 }
@@ -448,7 +448,7 @@ pub struct Msg {
 impl Msg {
     pub(crate) fn new(
         subject: Subject,
-        sid: String,
+        sid: Sid,
         reply_to: Option<Subject>,
         payload: Vec<u8>,
     ) -> Self {
@@ -466,13 +466,8 @@ impl Msg {
     }
 
     /// Get the subscription id
-    ///
-    /// **Note:** This is of type `&str` instead of type [`Sid`](struct.Sid.html) because the sid
-    /// returned by the server can be any ASCII string. However, in reality, the only messages
-    /// received by the client should have sids produced by the client and so they should always
-    /// be parsable as type [`Sid`](struct.Sid.html).
-    pub fn sid(&self) -> &str {
-        &self.sid
+    pub fn sid(&self) -> Sid {
+        self.sid
     }
 
     /// Get the reply to [`Subject`](struct.Subject.html)
@@ -530,7 +525,7 @@ pub enum ServerControl {
     Info(Info),
     Msg {
         subject: Subject,
-        sid: String,
+        sid: Sid,
         reply_to: Option<Subject>,
         len: u64,
     },
