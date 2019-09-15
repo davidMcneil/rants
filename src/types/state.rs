@@ -33,31 +33,37 @@ pub enum StateTransitionResult {
     Writer(TcpStreamWriteHalf),
 }
 
-/// Possible client states.
+/// Possible client states
 ///
 /// ```text
-///                                              Client State Diagram
-///                                    +--------+----------------------------------------------------------+
-///                                    |        |                                                          |
-///                                    |        v                                                          v
-/// +----------------+             +---+--------+---+            +----------------+               +--------+-------+
-/// |                |             |                |            |                |               |                |
-/// |  Disconnected  +------------>+   Connecting   +----------->+   Connected    +-------------->+ Disconnecting  |
-/// |                |             |                |            |                |               |                |
-/// +-------+--------+             +----------------+            +--------+-------+               +--------+-------+
-///         ^                                                             |                                |
-///         |                                                             |                                |
-///         +-------------------------------------------------------------+--------------------------------+
+///                                      State Diagram
+///                            +--------+-----------------------------------------+
+///                            |        |                                         |
+///                            |        v                                         v
+/// +----------------+     +---+--------+---+     +----------------+     +--------+-------+
+/// |                |     |                |     |                |     |                |
+/// |  Disconnected  +---->+   Connecting   +---->+   Connected    +---->+ Disconnecting  |
+/// |                |     |                |     |                |     |                |
+/// +-------+--------+     +----------------+     +--------+-------+     +--------+-------+
+///         ^                                              |                      |
+///         |                                              |                      |
+///         +----------------------------------------------+----------------------+
 /// ```
 #[derive(Clone, Debug)]
 pub enum ClientState {
+    /// The client is connected to an address.
     Connected(Address),
+    /// The client is connecting to an address.
     Connecting(Address),
+    /// The client is disconnected.
     Disconnected,
+    /// The client has been instructed to disconnect by calling
+    /// [`disconnect`](struct.Client.html#method.disconnect).
     Disconnecting,
 }
 
 impl ClientState {
+    /// Is the state `Connected`?
     pub fn is_connected(&self) -> bool {
         if let Self::Connected(_) = self {
             return true;
@@ -65,6 +71,7 @@ impl ClientState {
         false
     }
 
+    /// Is the state `Connecting`?
     pub fn is_connecting(&self) -> bool {
         if let Self::Connecting(_) = self {
             return true;
@@ -72,6 +79,7 @@ impl ClientState {
         false
     }
 
+    /// Is the state `Disconnected`?
     pub fn is_disconnected(&self) -> bool {
         if let Self::Disconnected = self {
             return true;
@@ -79,6 +87,7 @@ impl ClientState {
         false
     }
 
+    /// Is the state `Disconnecting`?
     pub fn is_disconnecting(&self) -> bool {
         if let Self::Disconnecting = self {
             return true;
