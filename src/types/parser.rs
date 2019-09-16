@@ -30,7 +30,7 @@ impl FromStr for ServerControl {
         let (s, control) =
             control_line(s).map_err(|_| Error::InvalidServerControl(String::from(s)))?;
         // Check we used all the input
-        if s.len() > 0 {
+        if !s.is_empty() {
             return Err(Error::InvalidServerControl(String::from(s)));
         }
         Ok(control)
@@ -43,7 +43,7 @@ impl FromStr for Subject {
     fn from_str(s: &str) -> Result<Self> {
         let (s, subject) = subject(s).map_err(|_| Error::InvalidSubject(String::from(s)))?;
         // Check we used all the input
-        if s.len() > 0 {
+        if !s.is_empty() {
             return Err(Error::InvalidSubject(String::from(s)));
         }
         Ok(subject)

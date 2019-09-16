@@ -8,10 +8,11 @@ mod util;
 
 use futures::{
     future::{self, Either, FutureExt},
-    lock::Mutex,
+    lock::{Mutex, MutexGuard},
     stream::StreamExt,
 };
 use log::{debug, error, info, trace};
+use owning_ref::{OwningRef, OwningRefMut, StableAddress};
 use pin_utils::pin_mut;
 use rand;
 use rand::seq::SliceRandom;
@@ -20,6 +21,7 @@ use std::{
     io::ErrorKind,
     mem,
     net::Shutdown,
+    ops::{Deref, DerefMut},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -52,13 +54,57 @@ pub use crate::types::{
     Subscription,
 };
 
+// A wrapper needed to implement the `StableAddress` trait to use `OwningRefMut`
+struct StableMutexGuard<'a, T: ?Sized>(MutexGuard<'a, T>);
+
+unsafe impl<'a, T: ?Sized> StableAddress for StableMutexGuard<'a, T> {}
+
+impl<T: ?Sized> Deref for StableMutexGuard<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &*self.0
+    }
+}
+
+impl<T: ?Sized> DerefMut for StableMutexGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut *self.0
+    }
+}
+
+pub struct ClientRefMut<'a, T: ?Sized>(OwningRefMut<StableMutexGuard<'a, SyncClient>, T>);
+
+impl<'a, T: ?Sized> Deref for ClientRefMut<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &*self.0
+    }
+}
+
+impl<'a, T: ?Sized> DerefMut for ClientRefMut<'a, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut *self.0
+    }
+}
+
+pub struct ClientRef<'a, T: ?Sized>(OwningRef<StableMutexGuard<'a, SyncClient>, T>);
+
+impl<'a, T: ?Sized> Deref for ClientRef<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &*self.0
+    }
+}
+
 /// The type of a [`Client`](struct.Client.html)'s [`delay_generator`](struct.Client.html#method.delay_generator).
 ///
 /// # Arguments
 /// * `client` - A reference to the `Client` that is trying to connect
 /// * `attempts` - The number of previous connect attempts
 /// * `addresses` - The number of addresses the `Client` is aware of
-pub type DelayGenerator = Box<dyn Fn(Arc<Mutex<Client>>, u64, u64) -> Duration + Send>;
+pub type DelayGenerator = Box<dyn Fn(&Client, u64, u64) -> Duration + Send>;
 
 /// Generate a [`Client`](struct.Client.html)'s [`delay_generator`](struct.Client.html#method.delay_generator).
 ///
@@ -83,27 +129,311 @@ pub fn generate_delay_generator(
     connect_series_delay: Duration,
     cool_down: Duration,
 ) -> DelayGenerator {
-    Box::new(
-        move |_: Arc<Mutex<Client>>, connect_attempts: u64, addresses: u64| {
-            if connect_attempts % (addresses * connect_series_attempts_before_cool_down) == 0 {
-                trace!("Using cool down delay {}s", cool_down.as_secs_f32());
-                cool_down
-            } else if connect_attempts % addresses == 0 {
-                trace!(
-                    "Using connect series delay {}s",
-                    connect_series_delay.as_secs_f32()
-                );
-                connect_series_delay
-            } else {
-                trace!("Using connect delay {}s", connect_delay.as_secs_f32());
-                connect_delay
-            }
-        },
-    )
+    Box::new(move |_: &Client, connect_attempts: u64, addresses: u64| {
+        if connect_attempts % (addresses * connect_series_attempts_before_cool_down) == 0 {
+            trace!("Using cool down delay {}s", cool_down.as_secs_f32());
+            cool_down
+        } else if connect_attempts % addresses == 0 {
+            trace!(
+                "Using connect series delay {}s",
+                connect_series_delay.as_secs_f32()
+            );
+            connect_series_delay
+        } else {
+            trace!("Using connect delay {}s", connect_delay.as_secs_f32());
+            connect_delay
+        }
+    })
 }
 
 /// The [NATS](https://nats.io/) client.
+#[derive(Clone)]
 pub struct Client {
+    // For now, wrapper the entire underlying client in a single Mutex. There are probably more
+    // performant locking schemes to explore.
+    sync: Arc<Mutex<SyncClient>>,
+}
+
+impl Client {
+    /// Create a new `Client` with a default [`Connect`](struct.Connect.html).
+    ///
+    /// # Arguments
+    ///
+    /// * `addresses` - the list of addresses to try and establish a connection to a server
+    pub fn new(addresses: Vec<Address>) -> Self {
+        Self::with_connect(addresses, Connect::new())
+    }
+
+    /// Create a new `Client` with the provided [`Connect`](struct.Connect.html).
+    ///
+    /// # Arguments
+    ///
+    /// * `addresses` - the list of addresses to try and establish a connection to a server
+    pub fn with_connect(addresses: Vec<Address>, connect: Connect) -> Self {
+        Self {
+            sync: Arc::new(Mutex::new(SyncClient::with_connect(addresses, connect))),
+        }
+    }
+
+    /// Get the current state of the `Client`.
+    pub async fn state(&self) -> ClientState {
+        self.lock().await.state()
+    }
+
+    /// Get a watch stream of `Client` state transitions.
+    pub async fn state_stream(&self) -> WatchReceiver<ClientState> {
+        self.lock().await.state_stream()
+    }
+
+    /// Get a the most recent [`Info`](struct.Info.html) sent from the server.
+    pub async fn info(&self) -> Info {
+        self.lock().await.info()
+    }
+
+    /// Get a mutable reference to this `Client`'s [`Connect`](struct.Connect.html).
+    pub async fn connect_mut(&self) -> ClientRefMut<'_, Connect> {
+        ClientRefMut(
+            OwningRefMut::new(StableMutexGuard(self.lock().await)).map_mut(|c| c.connect_mut()),
+        )
+    }
+
+    /// Get a mutable reference to the list of addresses used to try and establish a connection to a
+    /// server.
+    pub async fn addresses_mut(&self) -> ClientRefMut<'_, [Address]> {
+        ClientRefMut(
+            OwningRefMut::new(StableMutexGuard(self.lock().await)).map_mut(|c| c.addresses_mut()),
+        )
+    }
+
+    /// Get the configured TCP connect timeout. [default = `10s`]
+    ///
+    /// This is the timeout of a single connect attempt. It is not the timeout of the
+    /// [`connect`](struct.Client.html#method.connect) future which has no internal timeout.
+    pub async fn tcp_connect_timeout(&self) -> Duration {
+        self.lock().await.tcp_connect_timeout()
+    }
+
+    /// Set the TCP connect timeout.
+    pub async fn set_tcp_connect_timeout(&self, tcp_connect_timeout: Duration) -> &Self {
+        self.lock()
+            .await
+            .set_tcp_connect_timeout(tcp_connect_timeout);
+        self
+    }
+
+    /// Get the [`DelayGenerator`](type.DelayGenerator.html)
+    ///
+    /// The default generator is generated with [`generate_delay_generator`](function.generate_delay_generator.html)
+    /// with the following parameters:
+    ///
+    /// * `connect_series_attempts_before_cool_down` = `3`
+    /// * `connect_delay` = `0s`
+    /// * `connect_series_delay` = `5s`
+    /// * `cool_down` = `60s`
+    pub async fn delay_generator_mut(&self) -> ClientRefMut<'_, DelayGenerator> {
+        ClientRefMut(
+            OwningRefMut::new(StableMutexGuard(self.lock().await))
+                .map_mut(|c| c.delay_generator_mut()),
+        )
+    }
+
+    /// TODO: comments
+    pub async fn sids(&self) -> Vec<Sid> {
+        self.lock()
+            .await
+            .subscriptions()
+            .map(|(sid, _)| *sid)
+            .collect()
+    }
+
+    /// TODO: comments
+    pub async fn subscription(&self, sid: Sid) -> Option<ClientRef<'_, Subscription>> {
+        let client = self.lock().await;
+        if client.subscriptions.contains_key(&sid) {
+            Some(ClientRef(
+                OwningRef::new(StableMutexGuard(client))
+                    .map(|c| c.subscriptions.get(&sid).unwrap()),
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Send a `CONNECT` message to the server using the configured [`Connect`](struct.Connect.html).
+    ///
+    /// **Note**: [`connect`](struct.Client.html#method.connect) automatically sends a `CONNECT`
+    /// message. This is only needed in the case that you want to change the connection parameters
+    /// after already establishing a connection.
+    pub async fn send_connect(&self) -> Result<()> {
+        let mut client = self.lock().await;
+        client.send_connect().await
+    }
+
+    /// Continuously try and connect.
+    /// TODO: comments
+    pub async fn connect(&self) {
+        SyncClient::connect(Self::clone(self)).await
+    }
+
+    /// Disconnect from the server.
+    ///
+    /// This future will resolve when we are completely disconnected.
+    pub async fn disconnect(&self) {
+        SyncClient::disconnect(Arc::clone(&self.sync)).await
+    }
+
+    /// TODO: comments
+    pub async fn publish(&self, subject: &Subject, payload: &[u8]) -> Result<()> {
+        self.publish_with_optional_reply(subject, None, payload)
+            .await
+    }
+
+    /// TODO: comments
+    pub async fn publish_with_reply(
+        &self,
+        subject: &Subject,
+        reply_to: &Subject,
+        payload: &[u8],
+    ) -> Result<()> {
+        self.publish_with_optional_reply(subject, Some(reply_to), payload)
+            .await
+    }
+
+    /// TODO: comments
+    pub async fn publish_with_optional_reply(
+        &self,
+        subject: &Subject,
+        reply_to: Option<&Subject>,
+        payload: &[u8],
+    ) -> Result<()> {
+        let mut client = self.lock().await;
+        client
+            .publish_with_optional_reply(subject, reply_to, payload)
+            .await
+    }
+
+    /// TODO: comments
+    pub async fn request(&self, subject: &Subject, payload: &[u8]) -> Result<Msg> {
+        SyncClient::request(Arc::clone(&self.sync), subject, payload).await
+    }
+
+    /// TODO: comments
+    pub async fn subscribe(
+        &self,
+        subject: &Subject,
+        buffer: usize,
+    ) -> Result<(Sid, MpscReceiver<Msg>)> {
+        self.subscribe_optional_queue_group(subject, None, buffer)
+            .await
+    }
+
+    /// TODO: comments
+    pub async fn subscribe_optional_queue_group(
+        &self,
+        subject: &Subject,
+        queue_group: Option<&str>,
+        buffer: usize,
+    ) -> Result<(Sid, MpscReceiver<Msg>)> {
+        let mut client = self.lock().await;
+        client
+            .subscribe_optional_queue_group(subject, queue_group, buffer)
+            .await
+    }
+
+    /// TODO: comments
+    pub async fn unsubscribe(&self, sid: Sid) -> Result<()> {
+        self.unsubscribe_optional_max_msgs(sid, None).await
+    }
+
+    /// TODO: comments
+    pub async fn unsubscribe_with_max_msgs(&self, sid: Sid, max_msgs: u64) -> Result<()> {
+        self.unsubscribe_optional_max_msgs(sid, Some(max_msgs))
+            .await
+    }
+
+    /// TODO: comments
+    pub async fn unsubscribe_optional_max_msgs(
+        &self,
+        sid: Sid,
+        max_msgs: Option<u64>,
+    ) -> Result<()> {
+        let mut client = self.lock().await;
+        client.unsubscribe_optional_max_msgs(sid, max_msgs).await
+    }
+
+    /// TODO: comments
+    pub async fn unsubscribe_all(&self) -> Result<()> {
+        let unsubscribes = self
+            .sids()
+            .await
+            .into_iter()
+            .map(|sid| self.unsubscribe(sid));
+        future::try_join_all(unsubscribes).await?;
+        Ok(())
+    }
+
+    /// Get a watch stream of all received `INFO` messages.
+    pub async fn info_stream(&self) -> WatchReceiver<Info> {
+        self.lock().await.info_stream()
+    }
+
+    /// Get a watch stream of all received `PING` messages.
+    pub async fn ping_stream(&self) -> WatchReceiver<()> {
+        self.lock().await.ping_stream()
+    }
+
+    /// Get a watch stream of all received `PONG` messages.
+    pub async fn pong_stream(&self) -> WatchReceiver<()> {
+        self.lock().await.pong_stream()
+    }
+
+    /// Get a watch stream of all received `+OK` messages.
+    pub async fn ok_stream(&self) -> WatchReceiver<()> {
+        self.lock().await.ok_stream()
+    }
+
+    /// Get a watch stream of all received `-ERR` messages.
+    pub async fn err_stream(&self) -> WatchReceiver<ProtocolError> {
+        self.lock().await.err_stream()
+    }
+
+    /// Send a `PING` to the server.
+    ///
+    /// This method, coupled with a `pong_stream`, can be a useful way to check that the client is
+    /// still connected to the server.
+    pub async fn ping(&self) -> Result<()> {
+        let mut client = self.lock().await;
+        client.ping().await
+    }
+
+    /// Send a `PONG` to the server.
+    ///
+    /// Note, you do not have to manually send a `PONG` as part of the servers ping/pong keep
+    /// alive. The client library automatically handles replying to pings. You should not need
+    /// to use this method.
+    pub async fn pong(&self) -> Result<()> {
+        let mut client = self.lock().await;
+        client.pong().await
+    }
+
+    /// Send a ping and wait for a pong from the server
+    pub async fn ping_pong(&self) -> Result<()> {
+        SyncClient::ping_pong(Arc::clone(&self.sync)).await
+    }
+
+    async fn lock(&self) -> MutexGuard<'_, SyncClient> {
+        self.sync.lock().await
+    }
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        // TODO: Disconnect on drop
+        trace!("Client was dropped");
+    }
+}
+
+struct SyncClient {
     addresses: Vec<Address>,
     connect: Connect,
     state: ConnectionState,
@@ -124,22 +454,8 @@ pub struct Client {
     subscriptions: HashMap<Sid, Subscription>,
 }
 
-impl Client {
-    /// Create a new `Client` with a default [`Connect`](struct.Connect.html).
-    ///
-    /// # Arguments
-    ///
-    /// * `addresses` - the list of addresses to try and establish a connection to a server
-    pub fn new(addresses: Vec<Address>) -> Arc<Mutex<Self>> {
-        Self::with_connect(addresses, Connect::new())
-    }
-
-    /// Create a new `Client` with the provided [`Connect`](struct.Connect.html).
-    ///
-    /// # Arguments
-    ///
-    /// * `addresses` - the list of addresses to try and establish a connection to a server
-    pub fn with_connect(addresses: Vec<Address>, connect: Connect) -> Arc<Mutex<Self>> {
+impl SyncClient {
+    fn with_connect(addresses: Vec<Address>, connect: Connect) -> Self {
         let state = ConnectionState::Disconnected;
         let (state_tx, state_rx) = watch::channel((&state).into());
         let (info_tx, info_rx) = watch::channel(Info::new());
@@ -147,7 +463,7 @@ impl Client {
         let (pong_tx, pong_rx) = watch::channel(());
         let (ok_tx, ok_rx) = watch::channel(());
         let (err_tx, err_rx) = watch::channel(ProtocolError::UnknownProtocolOperation);
-        Arc::new(Mutex::new(Self {
+        Self {
             addresses,
             connect,
             state,
@@ -171,79 +487,47 @@ impl Client {
                 util::DEFAULT_COOL_DOWN,
             ),
             subscriptions: HashMap::new(),
-        }))
+        }
     }
 
-    /// Get the current state of the `Client`.
-    pub fn state(&self) -> ClientState {
+    fn state(&self) -> ClientState {
         self.state_rx.get_ref().clone()
     }
 
-    /// Get a watch stream of `Client` state transitions.
-    pub fn state_stream(&self) -> WatchReceiver<ClientState> {
+    fn state_stream(&self) -> WatchReceiver<ClientState> {
         self.state_rx.clone()
     }
 
-    /// Get a the most recent [`Info`](struct.Info.html) sent from the server.
     pub fn info(&self) -> Info {
         self.info_rx.get_ref().clone()
     }
 
-    /// Get a mutable reference to this `Client`'s [`Connect`](struct.Connect.html).
-    pub fn connect_mut(&mut self) -> &mut Connect {
+    fn connect_mut(&mut self) -> &mut Connect {
         &mut self.connect
     }
 
-    /// Get a mutable reference to the list of addresses used to try and establish a connection to a
-    /// server.
-    pub fn addresses_mut(&mut self) -> &mut [Address] {
+    fn addresses_mut(&mut self) -> &mut [Address] {
         &mut self.addresses
     }
 
-    /// Get the configured TCP connect timeout. [default = `10s`]
-    ///
-    /// This is the timeout of a single connect attempt. It is not the timeout of the
-    /// [`connect`](struct.Client.html#method.connect) future which has no internal timeout.
-    pub fn tcp_connect_timeout(&self) -> Duration {
+    fn tcp_connect_timeout(&self) -> Duration {
         self.tcp_connect_timeout
     }
 
-    /// Set the TCP connect timeout.
-    pub fn set_tcp_connect_timeout(&mut self, tcp_connect_timeout: Duration) -> &mut Self {
+    fn set_tcp_connect_timeout(&mut self, tcp_connect_timeout: Duration) -> &mut Self {
         self.tcp_connect_timeout = tcp_connect_timeout;
         self
     }
 
-    /// Get the [`DelayGenerator`](type.DelayGenerator.html)
-    ///
-    /// The default generator is generated with [`generate_delay_generator`](function.generate_delay_generator.html)
-    /// with the following parameters:
-    ///
-    /// * `connect_series_attempts_before_cool_down` = `3`
-    /// * `connect_delay` = `0s`
-    /// * `connect_series_delay` = `5s`
-    /// * `cool_down` = `60s`
-    pub fn delay_generator(&mut self) -> &DelayGenerator {
-        &self.delay_generator
+    fn delay_generator_mut(&mut self) -> &mut DelayGenerator {
+        &mut self.delay_generator
     }
 
-    /// Set the [`DelayGenerator`](type.DelayGenerator.html)
-    pub fn set_delay_generator(&mut self, delay_generator: DelayGenerator) -> &mut Self {
-        self.delay_generator = delay_generator;
-        self
-    }
-
-    /// TODO
-    pub fn subscriptions(&self) -> impl Iterator<Item = (&Sid, &Subscription)> {
+    fn subscriptions(&self) -> impl Iterator<Item = (&Sid, &Subscription)> {
         self.subscriptions.iter()
     }
 
-    /// Send a `CONNECT` message to the server using the configured [`Connect`](struct.Connect.html).
-    ///
-    /// **Note**: [`connect`](struct.Client.html#method.connect) automatically sends a `CONNECT`
-    /// message. This is only needed in the case that you want to change the connection parameters
-    /// after already establishing a connection.
-    pub async fn send_connect(&mut self) -> Result<()> {
+    async fn send_connect(&mut self) -> Result<()> {
         if let ConnectionState::Connected(address, writer) = &mut self.state {
             Self::send_connect_with_writer(writer, &self.connect, address).await
         } else {
@@ -251,9 +535,8 @@ impl Client {
         }
     }
 
-    /// Continuously try and connect.
-    /// TODO: comments
-    pub async fn connect(wrapped_client: Arc<Mutex<Self>>) {
+    #[allow(clippy::cognitive_complexity)]
+    async fn connect(wrapped_client: Client) {
         // If we are already connected do not connect again
         if let ConnectionState::Connected(_, _) = wrapped_client.lock().await.state {
             return;
@@ -281,7 +564,7 @@ impl Client {
             // of the loop so we do not have to do it before every continue statement.
             if connect_attempts != 0 {
                 let delay = (wrapped_client.lock().await.delay_generator)(
-                    Arc::clone(&wrapped_client),
+                    &wrapped_client,
                     connect_attempts,
                     addresses_len,
                 );
@@ -404,7 +687,7 @@ impl Client {
 
             // Spawn the task to handle reading subsequent server messages
             tokio::spawn(Self::type_erased_server_messages_handler(
-                Arc::clone(&wrapped_client),
+                Client::clone(&wrapped_client),
                 reader,
             ));
 
@@ -413,10 +696,7 @@ impl Client {
         }
     }
 
-    /// Disconnect from the server.
-    ///
-    /// This future will resolve when we are completely disconnected.
-    pub async fn disconnect(wrapped_client: Arc<Mutex<Self>>) {
+    async fn disconnect(wrapped_client: Arc<Mutex<Self>>) {
         let (tx, rx) = oneshot::channel();
         {
             let mut client = wrapped_client.lock().await;
@@ -444,14 +724,7 @@ impl Client {
         rx.await.expect("to receive disconnect signal");
     }
 
-    /// TODO: comments
-    pub async fn publish(&mut self, subject: &Subject, payload: &[u8]) -> Result<()> {
-        self.publish_with_optional_reply(subject, None, payload)
-            .await
-    }
-
-    /// TODO: comments
-    pub async fn publish_with_reply(
+    async fn publish_with_reply(
         &mut self,
         subject: &Subject,
         reply_to: &Subject,
@@ -461,8 +734,7 @@ impl Client {
             .await
     }
 
-    /// TODO: comments
-    pub async fn publish_with_optional_reply(
+    async fn publish_with_optional_reply(
         &mut self,
         subject: &Subject,
         reply_to: Option<&Subject>,
@@ -488,8 +760,7 @@ impl Client {
         }
     }
 
-    /// TODO: comments
-    pub async fn request(
+    async fn request(
         wrapped_client: Arc<Mutex<Self>>,
         subject: &Subject,
         payload: &[u8],
@@ -511,8 +782,7 @@ impl Client {
         Ok(rx.next().await.ok_or(Error::NoResponse)?)
     }
 
-    /// TODO: comments
-    pub async fn subscribe(
+    async fn subscribe(
         &mut self,
         subject: &Subject,
         buffer: usize,
@@ -521,19 +791,7 @@ impl Client {
             .await
     }
 
-    /// TODO: comments
-    pub async fn subscribe_with_queue_group(
-        &mut self,
-        subject: &Subject,
-        queue_group: &str,
-        buffer: usize,
-    ) -> Result<(Sid, MpscReceiver<Msg>)> {
-        self.subscribe_optional_queue_group(subject, Some(queue_group), buffer)
-            .await
-    }
-
-    /// TODO: comments
-    pub async fn subscribe_optional_queue_group(
+    async fn subscribe_optional_queue_group(
         &mut self,
         subject: &Subject,
         queue_group: Option<&str>,
@@ -552,19 +810,16 @@ impl Client {
         }
     }
 
-    /// TODO: comments
-    pub async fn unsubscribe(&mut self, sid: Sid) -> Result<()> {
+    async fn unsubscribe(&mut self, sid: Sid) -> Result<()> {
         self.unsubscribe_optional_max_msgs(sid, None).await
     }
 
-    /// TODO: comments
-    pub async fn unsubscribe_with_max_msgs(&mut self, sid: Sid, max_msgs: u64) -> Result<()> {
+    async fn unsubscribe_with_max_msgs(&mut self, sid: Sid, max_msgs: u64) -> Result<()> {
         self.unsubscribe_optional_max_msgs(sid, Some(max_msgs))
             .await
     }
 
-    /// TODO: comments
-    pub async fn unsubscribe_optional_max_msgs(
+    async fn unsubscribe_optional_max_msgs(
         &mut self,
         sid: Sid,
         max_msgs: Option<u64>,
@@ -586,49 +841,27 @@ impl Client {
         }
     }
 
-    /// TODO: comments
-    pub async fn unsubscribe_all(&mut self) -> Result<()> {
-        let sids = self
-            .subscriptions()
-            .map(|(sid, _)| *sid)
-            .collect::<Vec<_>>();
-        // TODO: parallelize
-        for sid in sids {
-            self.unsubscribe(sid).await?;
-        }
-        Ok(())
-    }
-
-    /// Get a watch stream of all received `INFO` messages.
     pub fn info_stream(&mut self) -> WatchReceiver<Info> {
         self.info_rx.clone()
     }
 
-    /// Get a watch stream of all received `PING` messages.
     pub fn ping_stream(&mut self) -> WatchReceiver<()> {
         self.ping_rx.clone()
     }
 
-    /// Get a watch stream of all received `PONG` messages.
     pub fn pong_stream(&mut self) -> WatchReceiver<()> {
         self.pong_rx.clone()
     }
 
-    /// Get a watch stream of all received `+OK` messages.
     pub fn ok_stream(&mut self) -> WatchReceiver<()> {
         self.ok_rx.clone()
     }
 
-    /// Get a watch stream of all received `-ERR` messages.
     pub fn err_stream(&mut self) -> WatchReceiver<ProtocolError> {
         self.err_rx.clone()
     }
 
-    /// Send a `PING` to the server.
-    ///
-    /// This method, coupled with a `pong_stream`, can be a useful way to check that the client is
-    /// still connected to the server.
-    pub async fn ping(&mut self) -> Result<()> {
+    async fn ping(&mut self) -> Result<()> {
         if let ConnectionState::Connected(_, writer) = &mut self.state {
             Self::write_line(writer, ClientControl::Ping).await?;
             Ok(())
@@ -637,12 +870,7 @@ impl Client {
         }
     }
 
-    /// Send a `PONG` to the server.
-    ///
-    /// Note, you do not have to manually send a `PONG` as part of the servers ping/pong keep
-    /// alive. The client library automatically handles replying to pings. You should not need
-    /// to use this method.
-    pub async fn pong(&mut self) -> Result<()> {
+    async fn pong(&mut self) -> Result<()> {
         if let ConnectionState::Connected(_, writer) = &mut self.state {
             Self::write_line(writer, ClientControl::Pong).await?;
             Ok(())
@@ -651,8 +879,7 @@ impl Client {
         }
     }
 
-    /// Send a ping and wait for a pong from the server
-    pub async fn ping_pong(wrapped_client: Arc<Mutex<Self>>) -> Result<()> {
+    async fn ping_pong(wrapped_client: Arc<Mutex<Self>>) -> Result<()> {
         let mut pong_stream = {
             let mut client = wrapped_client.lock().await;
             let mut pong_stream = client.pong_stream();
@@ -666,10 +893,10 @@ impl Client {
     }
 
     async fn server_messages_handler(
-        wrapped_client: Arc<Mutex<Self>>,
+        wrapped_client: Client,
         mut reader: FramedRead<TcpStreamReadHalf, Codec>,
     ) {
-        let disconnecting = Self::disconnecting(Arc::clone(&wrapped_client));
+        let disconnecting = Self::disconnecting(Arc::clone(&wrapped_client.sync));
         pin_mut!(disconnecting);
         loop {
             // Select between the next message and disconnecting
@@ -688,7 +915,7 @@ impl Client {
             // Handle the message if it was valid
             match message_result {
                 Ok(Ok(message)) => {
-                    Self::handle_server_message(Arc::clone(&wrapped_client), message).await;
+                    Self::handle_server_message(Arc::clone(&wrapped_client.sync), message).await;
                 }
                 Ok(Err(e)) => {
                     error!("Received invalid server message, err: {}", e);
@@ -728,7 +955,7 @@ impl Client {
         }
 
         if should_reconnect {
-            tokio::spawn(Self::connect(Arc::clone(&wrapped_client)));
+            tokio::spawn(Self::connect(Client::clone(&wrapped_client)));
         }
     }
 
@@ -832,7 +1059,7 @@ impl Client {
     //
     // https://github.com/rust-lang/rust/issues/53690
     fn type_erased_server_messages_handler(
-        wrapped_client: Arc<Mutex<Self>>,
+        wrapped_client: Client,
         reader: FramedRead<TcpStreamReadHalf, Codec>,
     ) -> impl std::future::Future<Output = ()> + Send {
         Self::server_messages_handler(wrapped_client, reader)
@@ -931,12 +1158,5 @@ impl Client {
             .broadcast(next_client_state)
             .expect("to broadcast state transition");
         result
-    }
-}
-
-impl Drop for Client {
-    fn drop(&mut self) {
-        // TODO: Disconnect on drop
-        trace!("Client was dropped");
     }
 }

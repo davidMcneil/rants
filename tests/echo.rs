@@ -2,39 +2,34 @@ mod common;
 
 use futures::{future, stream::StreamExt};
 use rants::Client;
-use std::sync::Arc;
 
 async fn main() {
     let number_of_messages = 1024;
 
     // Create a new client
     let address = "127.0.0.1".parse().unwrap();
-    let wrapped_client = Client::new(vec![address]);
+    let client = Client::new(vec![address]);
 
     // Configure it to echo messages so we can receive messages we sent
-    wrapped_client.lock().await.connect_mut().echo(true);
+    client.connect_mut().await.echo(true);
 
     // Connect the client
-    Client::connect(Arc::clone(&wrapped_client)).await;
+    client.connect().await;
 
     // Subscribe to a subscription called "test"
-    let (_, subscription) = {
-        let subject = "test".parse().unwrap();
-        let mut client = wrapped_client.lock().await;
-        client
-            .subscribe(&subject, number_of_messages)
-            .await
-            .unwrap()
-    };
+    let subject = "test".parse().unwrap();
+    let (_, subscription) = client
+        .subscribe(&subject, number_of_messages)
+        .await
+        .unwrap();
 
     // Publish messages to "test" subscription
     let mut publishers = Vec::new();
     for i in 0..number_of_messages {
-        let wrapped_client = Arc::clone(&wrapped_client);
+        let client = Client::clone(&client);
         publishers.push(async move {
             let subject = "test".parse().unwrap();
             let message = format!("{}", i);
-            let mut client = wrapped_client.lock().await;
             client.publish(&subject, message.as_bytes()).await.unwrap();
         });
     }
@@ -55,7 +50,7 @@ async fn main() {
     assert_eq!(messages, (0..number_of_messages).collect::<Vec<usize>>());
 
     // Disconnect
-    Client::disconnect(wrapped_client).await;
+    client.disconnect().await;
 }
 
 #[test]

@@ -11,6 +11,7 @@ bytes = "0.4.12"
 futures-preview = "0.3.0-alpha.18"
 log = "0.4.8"
 nom = "5.0.1"
+owning_ref = "0.4.0"
 pin-utils = "0.1.0-alpha.4"
 rand = "0.7.0"
 serde = { version = "1.0.99", features = ["derive"] }

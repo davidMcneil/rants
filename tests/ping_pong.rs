@@ -1,23 +1,22 @@
 mod common;
 
 use rants::Client;
-use std::sync::Arc;
 
 async fn main() {
     let address = "127.0.0.1".parse().unwrap();
-    let wrapped_client = Client::new(vec![address]);
+    let client = Client::new(vec![address]);
 
-    assert!(wrapped_client.lock().await.state().is_disconnected());
+    assert!(client.state().await.is_disconnected());
 
-    Client::connect(Arc::clone(&wrapped_client)).await;
+    client.connect().await;
 
-    assert!(wrapped_client.lock().await.state().is_connected());
+    assert!(client.state().await.is_connected());
 
     // Send a ping and wait for a pong
-    let ping_pong = Client::ping_pong(Arc::clone(&wrapped_client)).await;
+    let ping_pong = client.ping_pong().await;
     assert!(ping_pong.is_ok());
 
-    Client::disconnect(wrapped_client).await;
+    client.disconnect().await;
 }
 
 #[test]
