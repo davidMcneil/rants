@@ -2,15 +2,19 @@
     "cSpell.words": [
         "NATS",
         "Oneshot",
+        "Roadmap",
         "Unsub",
         "clippy",
         "combinator",
         "combinators",
         "deserializer",
         "msgs",
+        "performant",
+        "println",
         "proto",
         "serializer",
         "splitn",
+        "struct",
         "uuid"
     ]
 }

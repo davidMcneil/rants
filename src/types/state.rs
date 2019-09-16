@@ -33,7 +33,7 @@ pub enum StateTransitionResult {
     Writer(TcpStreamWriteHalf),
 }
 
-/// Possible client states
+/// Client states
 ///
 /// ```text
 ///                                      State Diagram

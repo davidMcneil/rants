@@ -9,7 +9,7 @@ use std::{
 use super::Authorization;
 use crate::{types::error::Error, util};
 
-/// An address used to connect to a server
+/// An address used to connect to a NATS server
 ///
 /// An `Address` consists of an [`Authorization`](enum.Authorization.html) and a `SocketAddr`.
 ///
@@ -19,9 +19,9 @@ use crate::{types::error::Error, util};
 ///
 /// The only required part of the address string is the `<ip_address>`. This makes the simplest
 /// address solely an IP address (eg `127.0.0.1`). If no port is specified the default, port `4222`,
-///  is used. Some example addresses include:
+///  is used.
 ///
-/// **Note**: When a client attempts to connect to the server at an address, the authorization
+/// **Note:** When a client attempts to connect to the server at an address, the authorization
 /// specified by the address will always override the client's `Connect` default
 /// [`authorization`](struct.Connect.html#method.authorization).
 ///

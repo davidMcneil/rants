@@ -1,6 +1,7 @@
 mod address;
 pub mod error;
 mod parser;
+mod refs;
 mod state;
 #[cfg(test)]
 mod tests;
@@ -17,6 +18,7 @@ use crate::util;
 
 pub use self::{
     address::Address,
+    refs::{ClientRef, ClientRefMut, StableMutexGuard},
     state::{ClientState, ConnectionState, StateTransition, StateTransitionResult},
 };
 
@@ -119,7 +121,7 @@ impl Info {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-/// The possible methods of client authorization set in the [`Connect`](struct.Connect.html) message.
+/// The methods of client authorization set in the [`Connect`](struct.Connect.html) message
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Authorization {
@@ -283,7 +285,7 @@ impl Connect {
         self.echo
     }
 
-    /// Optional boolean. If set to true, the server (version 1.2.0+) will not send originating
+    /// Optional boolean. If set to true, the server (version 1.2.0+) will send originating
     /// messages from this connection to its own subscriptions. Clients should set this to true
     /// only for server supporting this feature, which is when proto in the INFO protocol is set to
     /// at least 1 [default = `false`]
@@ -311,7 +313,7 @@ impl Default for Connect {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-/// The possible [`-ERR`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#okerr) messages sent from the server.
+/// The [`-ERR`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#okerr) messages sent from the server
 #[derive(Debug, PartialEq)]
 pub enum ProtocolError {
     /// Unknown protocol error
@@ -470,7 +472,7 @@ impl Msg {
         self.sid
     }
 
-    /// Get the reply to [`Subject`](struct.Subject.html)
+    /// Get the optional reply to [`Subject`](struct.Subject.html)
     pub fn reply_to(&self) -> Option<&Subject> {
         self.reply_to.as_ref()
     }
@@ -488,14 +490,15 @@ impl Msg {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-/// The type used for subscription IDs.
+/// The type used for subscription IDs
 ///
 /// This is a unique identifier the client uses when routing messages from the server. A
-/// subscription ID can be any ASCII string but within this client library we always use
+/// subscription ID can be any ASCII string, but within this client library, we always use
 /// the string representation of an atomically increasing `u64` counter.
 pub type Sid = u64;
 static SID: AtomicU64 = AtomicU64::new(0);
 
+/// A subscription to receive messages from a particular [`Subject`](struct.Subject.html)
 pub struct Subscription {
     subject: Subject,
     sid: Sid,
@@ -515,18 +518,23 @@ impl Subscription {
         }
     }
 
+    /// The [`Subject`](struct.Subject.html) of the subscription
     pub fn subject(&self) -> &Subject {
         &self.subject
     }
 
+    /// The unique subscription ID
     pub fn sid(&self) -> Sid {
         self.sid
     }
 
+    /// The optional queue group of the subscription
     pub fn queue_group(&self) -> Option<&str> {
         self.queue_group.as_ref().map(String::as_ref)
     }
 
+    /// If this is of type `Some`, it means the subscription will automatically unsubscribe
+    /// after receiving the indicated number of messages
     pub fn unsubscribe_after(&self) -> Option<u64> {
         self.unsubscribe_after
     }
@@ -535,7 +543,7 @@ impl Subscription {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// Representation of all possible server control lines. A control line is the first line of a
-/// message.
+/// message
 #[derive(Debug, PartialEq)]
 pub enum ServerControl {
     Info(Info),
@@ -552,7 +560,7 @@ pub enum ServerControl {
 }
 
 /// Representation of all possible server messages. This is similar to `ServerControl` however it
-/// contains a full message type.
+/// contains a full message type
 #[derive(Debug, PartialEq)]
 pub enum ServerMessage {
     Info(Info),

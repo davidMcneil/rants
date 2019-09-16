@@ -1,4 +1,55 @@
-//! Some documentation
+//! An async [NATS](https://nats.io/) client library for the Rust programming language.
+//!
+//! **Note:** Currently, `rants` requires a nightly version of the rust compiler due to its use of
+//! `async`/`await` syntax, but it should work on stable [soon](https://areweasyncyet.rs/)!
+//!
+//! The client aims to be an ergonomic, yet thin, wrapper over the NATS client protocol. The
+//! easiest way to learn to use the client is by reading the
+//! [NATS client protocol documentation](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html).
+//! The main entry point into the library's API is the [`Client`](struct.Client.html) struct.
+//!
+//! # Example
+//!  ```rust
+//! use futures::stream::StreamExt;
+//! use rants::Client;
+//! use tokio::runtime::Runtime;
+//!
+//! let main_future = async {
+//!     // A NATS server must be running on `127.0.0.1:4222`
+//!     let address = "127.0.0.1:4222".parse().unwrap();
+//!     let client = Client::new(vec![address]);
+//!
+//!     // Configure the client to receive messages even if it sent the message
+//!     client.connect_mut().await.echo(true);
+//!
+//!     // Connect to the server
+//!     client.connect().await;
+//!
+//!     // Create a new subject called "test"
+//!     let subject = "test".parse().unwrap();
+//!
+//!     // Subscribe to the "test" subject
+//!     let (_, mut subscription) = client.subscribe(&subject, 1024).await.unwrap();
+//!
+//!     // Publish a message to the "test" subject
+//!     client
+//!         .publish(&subject, b"This is a message!")
+//!         .await
+//!         .unwrap();
+//!
+//!     // Read a message from the subscription
+//!     let message = subscription.next().await.unwrap();
+//!     let message = String::from_utf8(message.into_payload()).unwrap();
+//!     println!("Received '{}'", message);
+//!     
+//!     // Disconnect from the server
+//!     client.disconnect().await;
+//! };
+//!
+//! let runtime = Runtime::new().expect("to create Runtime");
+//! runtime.spawn(main_future);
+//! runtime.shutdown_on_idle();
+//! ```
 
 mod codec;
 #[cfg(test)]
@@ -12,7 +63,7 @@ use futures::{
     stream::StreamExt,
 };
 use log::{debug, error, info, trace};
-use owning_ref::{OwningRef, OwningRefMut, StableAddress};
+use owning_ref::{OwningRef, OwningRefMut};
 use pin_utils::pin_mut;
 use rand;
 use rand::seq::SliceRandom;
@@ -21,7 +72,6 @@ use std::{
     io::ErrorKind,
     mem,
     net::Shutdown,
-    ops::{Deref, DerefMut},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -33,9 +83,8 @@ use tokio::{
         TcpStream,
     },
     sync::{
-        mpsc::{self, Receiver as MpscReceiver},
-        oneshot,
-        watch::{self, Receiver as WatchReceiver, Sender as WatchSender},
+        mpsc, oneshot,
+        watch::{self, Sender as WatchSender},
     },
     timer::{self, Timeout},
 };
@@ -45,60 +94,19 @@ use crate::{
     codec::Codec,
     error::{Error, Result},
     types::{
-        ClientControl, ConnectionState, ServerMessage, StateTransition, StateTransitionResult,
+        ClientControl, ConnectionState, ServerMessage, StableMutexGuard, StateTransition,
+        StateTransitionResult,
     },
 };
 
+pub use tokio::sync::{mpsc::Receiver as MpscReceiver, watch::Receiver as WatchReceiver};
+
 pub use crate::types::{
-    error, Address, Authorization, ClientState, Connect, Info, Msg, ProtocolError, Sid, Subject,
-    Subscription,
+    error, Address, Authorization, ClientRef, ClientRefMut, ClientState, Connect, Info, Msg,
+    ProtocolError, Sid, Subject, Subscription,
 };
 
-// A wrapper needed to implement the `StableAddress` trait to use `OwningRefMut`
-struct StableMutexGuard<'a, T: ?Sized>(MutexGuard<'a, T>);
-
-unsafe impl<'a, T: ?Sized> StableAddress for StableMutexGuard<'a, T> {}
-
-impl<T: ?Sized> Deref for StableMutexGuard<'_, T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &*self.0
-    }
-}
-
-impl<T: ?Sized> DerefMut for StableMutexGuard<'_, T> {
-    fn deref_mut(&mut self) -> &mut T {
-        &mut *self.0
-    }
-}
-
-pub struct ClientRefMut<'a, T: ?Sized>(OwningRefMut<StableMutexGuard<'a, SyncClient>, T>);
-
-impl<'a, T: ?Sized> Deref for ClientRefMut<'a, T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        &*self.0
-    }
-}
-
-impl<'a, T: ?Sized> DerefMut for ClientRefMut<'a, T> {
-    fn deref_mut(&mut self) -> &mut T {
-        &mut *self.0
-    }
-}
-
-pub struct ClientRef<'a, T: ?Sized>(OwningRef<StableMutexGuard<'a, SyncClient>, T>);
-
-impl<'a, T: ?Sized> Deref for ClientRef<'a, T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        &*self.0
-    }
-}
-
-/// The type of a [`Client`](struct.Client.html)'s [`delay_generator`](struct.Client.html#method.delay_generator).
+/// The type of a [`Client`](struct.Client.html)'s [`delay_generator_mut`](struct.Client.html#method.delay_generator_mut)
 ///
 /// # Arguments
 /// * `client` - A reference to the `Client` that is trying to connect
@@ -106,17 +114,17 @@ impl<'a, T: ?Sized> Deref for ClientRef<'a, T> {
 /// * `addresses` - The number of addresses the `Client` is aware of
 pub type DelayGenerator = Box<dyn Fn(&Client, u64, u64) -> Duration + Send>;
 
-/// Generate a [`Client`](struct.Client.html)'s [`delay_generator`](struct.Client.html#method.delay_generator).
+/// Generate a [`Client`](struct.Client.html)'s [`delay_generator_mut`](struct.Client.html#method.delay_generator_mut)
 ///
-/// A `Client`s `delay_generator` provides complete flexibility in determining delays between
-/// connect attempts. However, often a reasonable `delay_generator` can be produced by defining
-/// the few values required by this function.
+/// A `Client`s `delay_generator_mut` provides complete flexibility in determining delays between
+/// connect attempts. A reasonable `delay_generator_mut` can be produced by defining the few values
+/// required by this function.
 ///
 /// # Arguments
 ///
 /// * `connect_series_attempts_before_cool_down` - A `connect_series` is an attempt to try all
 /// addresses: those explicitly [specified](struct.Client.html#method.addresses_mut) and
-/// those received in an `INFO` messages's [`connect_urls`](struct.Info.html#method.connect_urls).
+/// those received in an `INFO` message's [`connect_urls`](struct.Info.html#method.connect_urls).
 /// This variable defines how many `connect_series` to try before delaying for the `cool_down`
 /// duration
 /// * `connect_delay` - The delay between each connect attempt.
@@ -146,7 +154,7 @@ pub fn generate_delay_generator(
     })
 }
 
-/// The [NATS](https://nats.io/) client.
+/// The entry point to the [NATS client protocol](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html)
 #[derive(Clone)]
 pub struct Client {
     // For now, wrapper the entire underlying client in a single Mutex. There are probably more
@@ -155,7 +163,7 @@ pub struct Client {
 }
 
 impl Client {
-    /// Create a new `Client` with a default [`Connect`](struct.Connect.html).
+    /// Create a new `Client` with a default [`Connect`](struct.Connect.html)
     ///
     /// # Arguments
     ///
@@ -164,7 +172,7 @@ impl Client {
         Self::with_connect(addresses, Connect::new())
     }
 
-    /// Create a new `Client` with the provided [`Connect`](struct.Connect.html).
+    /// Create a new `Client` with the provided [`Connect`](struct.Connect.html)
     ///
     /// # Arguments
     ///
@@ -175,22 +183,22 @@ impl Client {
         }
     }
 
-    /// Get the current state of the `Client`.
+    /// Get the current state of the `Client`
     pub async fn state(&self) -> ClientState {
         self.lock().await.state()
     }
 
-    /// Get a watch stream of `Client` state transitions.
+    /// Get a watch stream of `Client` state transitions
     pub async fn state_stream(&self) -> WatchReceiver<ClientState> {
         self.lock().await.state_stream()
     }
 
-    /// Get a the most recent [`Info`](struct.Info.html) sent from the server.
+    /// Get a the most recent [`Info`](struct.Info.html) sent from the server
     pub async fn info(&self) -> Info {
         self.lock().await.info()
     }
 
-    /// Get a mutable reference to this `Client`'s [`Connect`](struct.Connect.html).
+    /// Get a mutable reference to this `Client`'s [`Connect`](struct.Connect.html)
     pub async fn connect_mut(&self) -> ClientRefMut<'_, Connect> {
         ClientRefMut(
             OwningRefMut::new(StableMutexGuard(self.lock().await)).map_mut(|c| c.connect_mut()),
@@ -223,7 +231,7 @@ impl Client {
 
     /// Get the [`DelayGenerator`](type.DelayGenerator.html)
     ///
-    /// The default generator is generated with [`generate_delay_generator`](function.generate_delay_generator.html)
+    /// The default generator is generated with [`generate_delay_generator`](fn.generate_delay_generator.html)
     /// with the following parameters:
     ///
     /// * `connect_series_attempts_before_cool_down` = `3`
@@ -237,7 +245,7 @@ impl Client {
         )
     }
 
-    /// TODO: comments
+    /// Get a list of all currently subscribed subscription IDs
     pub async fn sids(&self) -> Vec<Sid> {
         self.lock()
             .await
@@ -246,7 +254,8 @@ impl Client {
             .collect()
     }
 
-    /// TODO: comments
+    /// Return a reference to a [`Subscription`](struct.Subscription.html) if the client is aware
+    /// of the specified subscription ID
     pub async fn subscription(&self, sid: Sid) -> Option<ClientRef<'_, Subscription>> {
         let client = self.lock().await;
         if client.subscriptions.contains_key(&sid) {
@@ -261,7 +270,7 @@ impl Client {
 
     /// Send a `CONNECT` message to the server using the configured [`Connect`](struct.Connect.html).
     ///
-    /// **Note**: [`connect`](struct.Client.html#method.connect) automatically sends a `CONNECT`
+    /// **Note:** [`connect`](struct.Client.html#method.connect) automatically sends a `CONNECT`
     /// message. This is only needed in the case that you want to change the connection parameters
     /// after already establishing a connection.
     pub async fn send_connect(&self) -> Result<()> {
@@ -269,26 +278,44 @@ impl Client {
         client.send_connect().await
     }
 
-    /// Continuously try and connect.
-    /// TODO: comments
+    /// Connect to a NATS server
+    ///
+    /// This will randomly shuffle a list consisting of all explicitly specified
+    /// [addresses](struct.Client.html#method.addresses_mut) and
+    /// addresses received in an `INFO` message's [`connect_urls`](struct.Info.html#method.connect_urls).
+    ///  A randomized list of addresses is used to avoid a
+    /// [thundering herd](https://nats-io.github.io/docs/developer/reconnect/random.html).
+    /// The client will continuously try to connect to each address in this list. The timeout of
+    /// each connect attempt is specified by the
+    /// [`tcp_connect_timeout`](struct.Client.html#method.tcp_connect_timeout). The delay between
+    /// each connect attempt is specified by the
+    /// [`delay_generator_mut`](struct.Client.html#method.delay_generator_mut).
+    ///
+    /// When this future resolves, we are guaranteed to have entered the
+    /// [`Connected`](enum.ClientState.html#variant.Connected) state.
+    /// **Unless**, [`disconnect`](struct.Client.html#method.disconnect) was called.
     pub async fn connect(&self) {
         SyncClient::connect(Self::clone(self)).await
     }
 
-    /// Disconnect from the server.
+    /// Disconnect from the NATS server
     ///
-    /// This future will resolve when we are completely disconnected.
+    /// When this future resolves, we are guaranteed to have entered the
+    /// [`Disconnected`](enum.ClientState.html#variant.Disconnected) state.
+    ///
+    /// **Note:** `Client` does not `disconnect` when it is `Drop`ped. In order to
+    /// avoid leaking futures, you must explicitly call `disconnect`.
     pub async fn disconnect(&self) {
         SyncClient::disconnect(Arc::clone(&self.sync)).await
     }
 
-    /// TODO: comments
+    /// Convenience wrapper around [`publish_with_optional_reply`](struct.Client.html#method.publish_with_optional_reply)
     pub async fn publish(&self, subject: &Subject, payload: &[u8]) -> Result<()> {
         self.publish_with_optional_reply(subject, None, payload)
             .await
     }
 
-    /// TODO: comments
+    /// Convenience wrapper around [`publish_with_optional_reply`](struct.Client.html#method.publish_with_optional_reply)
     pub async fn publish_with_reply(
         &self,
         subject: &Subject,
@@ -299,7 +326,12 @@ impl Client {
             .await
     }
 
-    /// TODO: comments
+    /// [`PUB`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#pub)lish a message
+    ///
+    /// # Arguments
+    /// * `subject` - The subject to publish to
+    /// * `reply_to` - The optional reply to subject
+    /// * `payload` - The actual contents of the message
     pub async fn publish_with_optional_reply(
         &self,
         subject: &Subject,
@@ -312,23 +344,45 @@ impl Client {
             .await
     }
 
-    /// TODO: comments
+    /// Implements the [request-reply pattern](https://nats-io.github.io/docs/developer/concepts/reqreply.html)
+    ///
+    /// **Note:** This uses the old method of request reply. It creates a temporary subscription that is
+    /// immediately unsubscribed from.
+    /// See [here](https://github.com/nats-io/nats.go/issues/294) for an improved implementation.
     pub async fn request(&self, subject: &Subject, payload: &[u8]) -> Result<Msg> {
         SyncClient::request(Arc::clone(&self.sync), subject, payload).await
     }
 
-    /// TODO: comments
+    /// Convenience wrapper around [`subscribe_with_optional_queue_group`](struct.Client.html#method.subscribe_with_optional_queue_group)
     pub async fn subscribe(
         &self,
         subject: &Subject,
         buffer: usize,
     ) -> Result<(Sid, MpscReceiver<Msg>)> {
-        self.subscribe_optional_queue_group(subject, None, buffer)
+        self.subscribe_with_optional_queue_group(subject, None, buffer)
             .await
     }
 
-    /// TODO: comments
-    pub async fn subscribe_optional_queue_group(
+    /// Convenience wrapper around [`subscribe_with_optional_queue_group`](struct.Client.html#method.subscribe_with_optional_queue_group)
+    pub async fn subscribe_with_queue_group(
+        &self,
+        subject: &Subject,
+        queue_group: &str,
+        buffer: usize,
+    ) -> Result<(Sid, MpscReceiver<Msg>)> {
+        self.subscribe_with_optional_queue_group(subject, Some(queue_group), buffer)
+            .await
+    }
+
+    /// [`SUB`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#sub)scribe to a [`Subject`](struct.Subject.html)
+    ///
+    /// Returns the subscription ID of the newly created subscription and a channel to receive incoming messages on.
+    ///
+    /// # Arguments
+    /// * `subject` - The subject to subscribe to
+    /// * `reply_to` - The optional queue group to join
+    /// * `buffer` - The size of the underlying mpsc channel
+    pub async fn subscribe_with_optional_queue_group(
         &self,
         subject: &Subject,
         queue_group: Option<&str>,
@@ -336,22 +390,27 @@ impl Client {
     ) -> Result<(Sid, MpscReceiver<Msg>)> {
         let mut client = self.lock().await;
         client
-            .subscribe_optional_queue_group(subject, queue_group, buffer)
+            .subscribe_with_optional_queue_group(subject, queue_group, buffer)
             .await
     }
 
-    /// TODO: comments
+    /// Convenience wrapper around [`unsubscribe_optional_max_msgs`](struct.Client.html#method.unsubscribe_optional_max_msgs)
     pub async fn unsubscribe(&self, sid: Sid) -> Result<()> {
         self.unsubscribe_optional_max_msgs(sid, None).await
     }
 
-    /// TODO: comments
+    /// Convenience wrapper around [`unsubscribe_optional_max_msgs`](struct.Client.html#method.unsubscribe_optional_max_msgs)
     pub async fn unsubscribe_with_max_msgs(&self, sid: Sid, max_msgs: u64) -> Result<()> {
         self.unsubscribe_optional_max_msgs(sid, Some(max_msgs))
             .await
     }
 
-    /// TODO: comments
+    /// [`UNSUB`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#unsub)scribe from a subscription ID
+    ///
+    /// # Arguments
+    /// * `sid` - The subscription id to unsubscribe from
+    /// * `max_msgs` - Unsubscribe after receiving the specified number of messages. If this is
+    /// `None`, the subscription is immediately unsubscribed.
     pub async fn unsubscribe_optional_max_msgs(
         &self,
         sid: Sid,
@@ -361,7 +420,7 @@ impl Client {
         client.unsubscribe_optional_max_msgs(sid, max_msgs).await
     }
 
-    /// TODO: comments
+    /// Unsubscribe from all subscriptions
     pub async fn unsubscribe_all(&self) -> Result<()> {
         let unsubscribes = self
             .sids()
@@ -372,32 +431,32 @@ impl Client {
         Ok(())
     }
 
-    /// Get a watch stream of all received `INFO` messages.
+    /// Get a watch stream of [`INFO`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#info) messages received from the server
     pub async fn info_stream(&self) -> WatchReceiver<Info> {
         self.lock().await.info_stream()
     }
 
-    /// Get a watch stream of all received `PING` messages.
+    /// Get a watch stream of [`PING`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#pingpong) messages received from the server
     pub async fn ping_stream(&self) -> WatchReceiver<()> {
         self.lock().await.ping_stream()
     }
 
-    /// Get a watch stream of all received `PONG` messages.
+    /// Get a watch stream of [`PONG`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#pingpong) messages received from the server
     pub async fn pong_stream(&self) -> WatchReceiver<()> {
         self.lock().await.pong_stream()
     }
 
-    /// Get a watch stream of all received `+OK` messages.
+    /// Get a watch stream of [`+OK`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#okerr) messages received from the server
     pub async fn ok_stream(&self) -> WatchReceiver<()> {
         self.lock().await.ok_stream()
     }
 
-    /// Get a watch stream of all received `-ERR` messages.
+    /// Get a watch stream of [`-ERR`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#okerr) messages received from the server
     pub async fn err_stream(&self) -> WatchReceiver<ProtocolError> {
         self.lock().await.err_stream()
     }
 
-    /// Send a `PING` to the server.
+    /// Send a [`PING`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#pingpong) to the server.
     ///
     /// This method, coupled with a `pong_stream`, can be a useful way to check that the client is
     /// still connected to the server.
@@ -406,9 +465,9 @@ impl Client {
         client.ping().await
     }
 
-    /// Send a `PONG` to the server.
+    /// Send a [`PONG`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#pingpong) to the server.
     ///
-    /// Note, you do not have to manually send a `PONG` as part of the servers ping/pong keep
+    /// **Note:** you do not have to manually send a `PONG` as part of the servers ping/pong keep
     /// alive. The client library automatically handles replying to pings. You should not need
     /// to use this method.
     pub async fn pong(&self) -> Result<()> {
@@ -416,7 +475,7 @@ impl Client {
         client.pong().await
     }
 
-    /// Send a ping and wait for a pong from the server
+    /// Send a `PONG` and wait for a `PONG` from the server
     pub async fn ping_pong(&self) -> Result<()> {
         SyncClient::ping_pong(Arc::clone(&self.sync)).await
     }
@@ -765,9 +824,6 @@ impl SyncClient {
         subject: &Subject,
         payload: &[u8],
     ) -> Result<Msg> {
-        // This uses the old method of request reply. It creates a temporary subscription that is
-        // immediately unsubscribed from.
-        // See https://github.com/nats-io/nats.go/issues/294 for a different implementation.
         let inbox_uuid = Uuid::new_v4();
         let reply_to = format!("{}.{}", util::INBOX_PREFIX, inbox_uuid.to_simple()).parse()?;
         let mut rx = {
@@ -787,11 +843,11 @@ impl SyncClient {
         subject: &Subject,
         buffer: usize,
     ) -> Result<(Sid, MpscReceiver<Msg>)> {
-        self.subscribe_optional_queue_group(subject, None, buffer)
+        self.subscribe_with_optional_queue_group(subject, None, buffer)
             .await
     }
 
-    async fn subscribe_optional_queue_group(
+    async fn subscribe_with_optional_queue_group(
         &mut self,
         subject: &Subject,
         queue_group: Option<&str>,
