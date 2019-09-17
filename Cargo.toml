@@ -8,7 +8,7 @@ keywords = ["client", "nats", "pub-sub", "messaging", "queue"]
 categories = ["asynchronous", "api-bindings", "database-implementations", "network-programming", "parser-implementations"]
 license = "(MIT OR Apache-2.0)"
 edition = "2018"
-exclude = ["rust-toolchain"]
+exclude = ["rust-toolchain", ".vscode"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
