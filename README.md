@@ -1,15 +1,15 @@
 # Rants
 
-![crates.io](https://img.shields.io/crates/v/rants.svg)
-![docs](https://docs.rs/rants/badge.svg)
+[![crates.io](https://img.shields.io/crates/v/rants.svg)](https://crates.io/crates/rants)
+[![docs](https://docs.rs/rants/badge.svg)](https://docs.rs/rants)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![License](https://img.shields.io/badge/license-APACHE-blue.svg)
 
 An async [NATS](https://nats.io/) client library for the Rust programming language.
 
-**Note:** Currently, `rants` requires a nightly version of the rust compiler due to its use of `async`/`await` syntax, but it should work on stable [soon](https://areweasyncyet.rs/)!
+**Note:** Currently, `rants` requires a nightly version of the Rust compiler due to its use of `async`/`await` syntax, but it should work on stable [soon](https://areweasyncyet.rs/)!
 
-The client aims to be an ergonomic, yet thin, wrapper over the NATS client protocol. The easiest way to learn to use the client is by reading the [NATS client protocol documentation](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html). The main entry point into the library's API is the [`Client`](struct.Client.html) struct.
+The client aims to be an ergonomic, yet thin, wrapper over the NATS client protocol. The easiest way to learn to use the client is by reading the [NATS client protocol documentation](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html). The main entry point into the library's API is the [`Client`](https://docs.rs/rants/latest/rants/struct.Client.html) struct.
 
 # Example
 
@@ -60,6 +60,10 @@ runtime.shutdown_on_idle();
 The integration test suite requires the [NATS server](https://nats.io/download/nats-io/nats-server/) to be reachable at `127.0.0.1:4222`:
 
     > cargo test
+
+The [`env_logger`](https://github.com/sebasmagri/env_logger/) crate is used in integration test. To enable it and run a single test run:
+
+    > RUST_LOG=rants=trace cargo test ping_pong
 
 ## Roadmap
 

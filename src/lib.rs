@@ -1,6 +1,6 @@
 //! An async [NATS](https://nats.io/) client library for the Rust programming language.
 //!
-//! **Note:** Currently, `rants` requires a nightly version of the rust compiler due to its use of
+//! **Note:** Currently, `rants` requires a nightly version of the Rust compiler due to its use of
 //! `async`/`await` syntax, but it should work on stable [soon](https://areweasyncyet.rs/)!
 //!
 //! The client aims to be an ergonomic, yet thin, wrapper over the NATS client protocol. The
