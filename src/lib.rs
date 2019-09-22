@@ -294,6 +294,11 @@ impl Client {
     /// When this future resolves, we are guaranteed to have entered the
     /// [`Connected`](enum.ClientState.html#variant.Connected) state.
     /// **Unless**, [`disconnect`](struct.Client.html#method.disconnect) was called.
+    ///
+    /// Should the client become disconnected for any reason, other than calling
+    /// [`disconnect`](struct.Client.html#method.disconnect), the client will continuously try
+    /// to reconnect. Upon a successful reconnect, the client will automatically subscribe to all
+    /// subscriptions.
     pub async fn connect(&self) {
         SyncClient::connect(Self::clone(self)).await
     }
