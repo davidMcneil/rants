@@ -33,6 +33,7 @@ pub struct Info {
     pub(crate) host: String,
     pub(crate) port: u16,
     pub(crate) max_payload: usize,
+    #[serde(default)]
     pub(crate) proto: i32,
     pub(crate) client_id: Option<u64>,
     #[serde(default)]

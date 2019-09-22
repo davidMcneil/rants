@@ -65,6 +65,30 @@ fn parse_info() {
             connect_urls: Vec::new(),
         })
     );
+
+    assert_eq!(
+        ServerControl::from_str(
+            "INFO {\"server_id\":\"EIcTs1hcrlywWCrsUATcqP\",\"version\":\"1.1.0\",\
+             \"git_commit\":\"add6d79\",\"go\":\"go1.9.4\",\"host\":\"0.0.0.0\",\
+             \"port\":4222,\"auth_required\":false,\"tls_required\":false,\
+             \"tls_verify\":false,\"max_payload\":1048576} \r\n"
+        )
+        .unwrap(),
+        ServerControl::Info(Info {
+            server_id: String::from("EIcTs1hcrlywWCrsUATcqP"),
+            version: String::from("1.1.0"),
+            go: String::from("go1.9.4"),
+            host: String::from("0.0.0.0"),
+            port: 4222,
+            max_payload: 1048576,
+            proto: 0,
+            client_id: None,
+            auth_required: false,
+            tls_required: false,
+            tls_verify: false,
+            connect_urls: Vec::new(),
+        })
+    );
 }
 
 #[test]
