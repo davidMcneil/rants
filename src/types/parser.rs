@@ -7,7 +7,7 @@ use nom::{
     branch::alt,
     bytes::complete::{is_not, tag, tag_no_case, take_until},
     character::complete::{digit1, space1},
-    combinator::{map_res, opt},
+    combinator::{all_consuming, cut, map_res, opt},
     multi::separated_nonempty_list,
     sequence::delimited,
     IResult,
@@ -18,7 +18,7 @@ use std::str::FromStr;
 use crate::{
     types::{
         error::{Error, Result},
-        ProtocolError, ServerControl, Sid, Subject,
+        Info, ProtocolError, ServerControl, Sid, Subject,
     },
     util,
 };
@@ -27,12 +27,8 @@ impl FromStr for ServerControl {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        let (s, control) =
-            control_line(s).map_err(|_| Error::InvalidServerControl(String::from(s)))?;
-        // Check we used all the input
-        if !s.is_empty() {
-            return Err(Error::InvalidServerControl(String::from(s)));
-        }
+        let (_, control) = all_consuming(control_line)(s)
+            .map_err(|_| Error::InvalidServerControl(String::from(s)))?;
         Ok(control)
     }
 }
@@ -41,11 +37,8 @@ impl FromStr for Subject {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        let (s, subject) = subject(s).map_err(|_| Error::InvalidSubject(String::from(s)))?;
-        // Check we used all the input
-        if !s.is_empty() {
-            return Err(Error::InvalidSubject(String::from(s)));
-        }
+        let (_, subject) =
+            all_consuming(subject)(s).map_err(|_| Error::InvalidSubject(String::from(s)))?;
         Ok(subject)
     }
 }
@@ -58,12 +51,20 @@ fn control_line(input: &str) -> IResult<&str, ServerControl> {
     Ok((input, control))
 }
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+fn info_after_op_name(input: &str) -> IResult<&str, Info> {
+    let (input, _) = space1(input)?;
+    map_res(take_until(util::MESSAGE_TERMINATOR), serde_json::from_str)(input)
+}
+
 fn info(input: &str) -> IResult<&str, ServerControl> {
     let (input, _) = tag_no_case(util::INFO_OP_NAME)(input)?;
-    let (input, _) = space1(input)?;
-    let (input, info) = map_res(take_until(util::MESSAGE_TERMINATOR), serde_json::from_str)(input)?;
+    let (input, info) = cut(info_after_op_name)(input)?;
     Ok((input, ServerControl::Info(info)))
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 fn token(input: &str) -> IResult<&str, &str> {
     alt((
@@ -106,14 +107,15 @@ fn subject(input: &str) -> IResult<&str, Subject> {
     alt((full_wildcard_subject, not_full_wildcard_subject))(input)
 }
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
 fn reply_to(input: &str) -> IResult<&str, Subject> {
     let (input, subject) = subject(input)?;
     let (input, _) = space1(input)?;
     Ok((input, subject))
 }
 
-fn msg(input: &str) -> IResult<&str, ServerControl> {
-    let (input, _) = tag_no_case(util::MSG_OP_NAME)(input)?;
+fn msg_after_op_name(input: &str) -> IResult<&str, ServerControl> {
     let (input, _) = space1(input)?;
     let (input, subject) = subject(input)?;
     let (input, _) = space1(input)?;
@@ -134,20 +136,33 @@ fn msg(input: &str) -> IResult<&str, ServerControl> {
     ))
 }
 
+fn msg(input: &str) -> IResult<&str, ServerControl> {
+    let (input, _) = tag_no_case(util::MSG_OP_NAME)(input)?;
+    cut(msg_after_op_name)(input)
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
 fn ping(input: &str) -> IResult<&str, ServerControl> {
     let (input, _) = tag_no_case(util::PING_OP_NAME)(input)?;
     Ok((input, ServerControl::Ping))
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 fn pong(input: &str) -> IResult<&str, ServerControl> {
     let (input, _) = tag_no_case(util::PONG_OP_NAME)(input)?;
     Ok((input, ServerControl::Pong))
 }
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
 fn plus_ok(input: &str) -> IResult<&str, ServerControl> {
     let (input, _) = tag_no_case(util::OK_OP_NAME)(input)?;
     Ok((input, ServerControl::Ok))
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 fn unknown_protocol_operation(input: &str) -> IResult<&str, ProtocolError> {
     let (input, _) = tag(util::UNKNOWN_PROTOCOL_OPERATION)(input)?;
@@ -259,9 +274,15 @@ fn parse_protocol_err(input: &str) -> IResult<&str, ProtocolError> {
     Ok((input, protocol_err))
 }
 
-fn minus_err(input: &str) -> IResult<&str, ServerControl> {
-    let (input, _) = tag_no_case(util::ERR_OP_NAME)(input)?;
+fn minus_err_after_op_name(input: &str) -> IResult<&str, ServerControl> {
     let (input, _) = space1(input)?;
     let (input, e) = parse_protocol_err(input)?;
     Ok((input, ServerControl::Err(e)))
 }
+
+fn minus_err(input: &str) -> IResult<&str, ServerControl> {
+    let (input, _) = tag_no_case(util::ERR_OP_NAME)(input)?;
+    cut(minus_err_after_op_name)(input)
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////

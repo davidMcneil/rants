@@ -220,6 +220,7 @@ fn parse_err() {
 #[test]
 fn parse_fails() {
     assert!(ServerControl::from_str("+ok").is_err());
+    assert!(ServerControl::from_str("+ok\r\n some more").is_err());
     assert!(ServerControl::from_str("+err 'test'\r\n").is_err());
     assert!(ServerControl::from_str("some_random_text\r\n").is_err());
 }
