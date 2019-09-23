@@ -78,16 +78,14 @@ use std::{
 use tokio::{
     codec::FramedRead,
     io::AsyncWriteExt,
-    net::tcp::{
-        split::{TcpStreamReadHalf, TcpStreamWriteHalf},
-        TcpStream,
-    },
+    net::tcp::TcpStream,
     sync::{
         mpsc, oneshot,
         watch::{self, Sender as WatchSender},
     },
     timer::{self, Timeout},
 };
+use tokio_io::split::{self, ReadHalf, WriteHalf};
 use uuid::Uuid;
 
 use crate::{
@@ -674,7 +672,12 @@ impl SyncClient {
                 client.tcp_connect_timeout,
             );
             let (reader, mut writer) = match connect.await {
-                Ok(Ok(sink_and_stream)) => sink_and_stream.split(),
+                Ok(Ok(sink_and_stream)) => {
+                    // TODO: Currently, we use the generic io split in order to avoid lifetime
+                    // complications. However, `TcpStream` does implement a specialized split. It
+                    // may be worth switching to the specialized version to avoid overhead.
+                    split::split(sink_and_stream)
+                }
                 Ok(Err(e)) => {
                     error!("Failed to connect to '{}', err: {}", address, e);
                     continue;
@@ -955,7 +958,7 @@ impl SyncClient {
 
     async fn server_messages_handler(
         wrapped_client: Client,
-        mut reader: FramedRead<TcpStreamReadHalf, Codec>,
+        mut reader: FramedRead<ReadHalf<TcpStream>, Codec>,
     ) {
         let disconnecting = Self::disconnecting(Arc::clone(&wrapped_client.sync));
         pin_mut!(disconnecting);
@@ -999,15 +1002,11 @@ impl SyncClient {
         if let StateTransitionResult::Writer(writer) =
             client.state_transition(StateTransition::ToDisconnected)
         {
-            match reader.into_inner().reunite(writer) {
-                Ok(tcp) => {
-                    if let Err(e) = tcp.shutdown(Shutdown::Both) {
-                        if e.kind() != ErrorKind::NotConnected {
-                            error!("Failed to shutdown TCP stream, err: {}", e);
-                        }
-                    }
+            let tcp = reader.into_inner().unsplit(writer);
+            if let Err(e) = tcp.shutdown(Shutdown::Both) {
+                if e.kind() != ErrorKind::NotConnected {
+                    error!("Failed to shutdown TCP stream, err: {}", e);
                 }
-                Err(e) => error!("Failed to reunite TCP stream, err: {}", e),
             }
         } else {
             // We should always have a writer to close
@@ -1121,7 +1120,7 @@ impl SyncClient {
     // https://github.com/rust-lang/rust/issues/53690
     fn type_erased_server_messages_handler(
         wrapped_client: Client,
-        reader: FramedRead<TcpStreamReadHalf, Codec>,
+        reader: FramedRead<ReadHalf<TcpStream>, Codec>,
     ) -> impl std::future::Future<Output = ()> + Send {
         Self::server_messages_handler(wrapped_client, reader)
     }
@@ -1137,7 +1136,7 @@ impl SyncClient {
     }
 
     async fn write_line(
-        writer: &mut TcpStreamWriteHalf,
+        writer: &mut WriteHalf<TcpStream>,
         control_line: ClientControl<'_>,
     ) -> Result<()> {
         let line = control_line.to_line();
@@ -1145,7 +1144,7 @@ impl SyncClient {
     }
 
     async fn send_connect_with_writer(
-        writer: &mut TcpStreamWriteHalf,
+        writer: &mut WriteHalf<TcpStream>,
         connect: &Connect,
         address: &Address,
     ) -> Result<()> {

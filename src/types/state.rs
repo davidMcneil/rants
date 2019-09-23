@@ -1,28 +1,29 @@
 use std::fmt;
-use tokio::net::tcp::split::TcpStreamWriteHalf;
+use tokio::net::TcpStream;
+use tokio_io::split::WriteHalf;
 
 use crate::types::Address;
 
 // Internal state representation. Identical to `ClientState` but tracks internal implementation
-// details such as `TcpStreamWriteHalf`.
+// details such as `WriteHalf`.
 //
-// I would rather use an `Encoder` (instead of the raw `TcpStreamWriteHalf`) that operates
+// I would rather use an `Encoder` (instead of the raw `WriteHalf`) that operates
 // on a `ClientControl` enum. Unfortunately, when I attempted this, it was painful to make the
 // payload passed to publish be of type `&[u8]` instead of `Vec<u8>` without a clone. So for
 // now, the writer operates at the tcp layer writing raw bytes while the reader uses a custom
 // codec.
 pub enum ConnectionState {
-    Connected(Address, TcpStreamWriteHalf),
+    Connected(Address, WriteHalf<TcpStream>),
     Connecting(Address),
     Disconnected,
-    // If we are coming from a connected state, we have a `TcpStreamWriteHalf` to close
-    Disconnecting(Option<TcpStreamWriteHalf>),
+    // If we are coming from a connected state, we have a `WriteHalf` to close
+    Disconnecting(Option<WriteHalf<TcpStream>>),
 }
 
 #[derive(Debug)]
 pub enum StateTransition {
     ToConnecting(Address),
-    ToConnected(TcpStreamWriteHalf),
+    ToConnected(WriteHalf<TcpStream>),
     ToDisconnecting,
     ToDisconnected,
 }
@@ -30,7 +31,7 @@ pub enum StateTransition {
 // Used to return data from a state transition
 pub enum StateTransitionResult {
     None,
-    Writer(TcpStreamWriteHalf),
+    Writer(WriteHalf<TcpStream>),
 }
 
 /// Client states

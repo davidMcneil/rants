@@ -9,12 +9,15 @@
         "combinators",
         "deserializer",
         "msgs",
+        "nitox",
         "performant",
         "println",
         "proto",
+        "ratsio",
         "serializer",
         "splitn",
         "struct",
+        "unsplit",
         "uuid"
     ]
 }
