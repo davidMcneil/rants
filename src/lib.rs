@@ -1050,24 +1050,17 @@ impl SyncClient {
                 };
                 // Try and send the message to the subscription receiver
                 let subject = msg.subject().clone();
-                if let Err(e) = subscription.tx.try_send(msg) {
+                if let Err(e) = subscription.tx.send(msg).await {
                     // If we could not send because the receiver is closed, we no longer
                     // care about this subscription and should unsubscribe
-                    if e.is_closed() {
-                        let wrapped_client = Arc::clone(&wrapped_client);
-                        tokio::spawn(async move {
-                            info!("Unsubscribing from closed sid '{}'", sid);
-                            let mut client = wrapped_client.lock().await;
-                            if let Err(e) = client.unsubscribe(sid).await {
-                                error!("Failed to unsubscribe from sid '{}', err: {}", sid, e);
-                            }
-                        });
-                    } else {
-                        error!(
-                            "Failed to send msg to sid '{}' with subject '{}', err: {}",
-                            sid, subject, e
-                        );
-                    }
+                    let wrapped_client = Arc::clone(&wrapped_client);
+                    tokio::spawn(async move {
+                        info!("Unsubscribing from closed sid '{}'", sid);
+                        let mut client = wrapped_client.lock().await;
+                        if let Err(e) = client.unsubscribe(sid).await {
+                            error!("Failed to unsubscribe from sid '{}', err: {}", sid, e);
+                        }
+                    });
                 }
                 // If we have received all the messages we were waiting for, unsubscribe
                 if let Some(unsubscribe_after) = &mut subscription.unsubscribe_after() {
