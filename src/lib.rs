@@ -839,19 +839,7 @@ impl SyncClient {
         wrapped_client: Arc<Mutex<Self>>,
         mut subscription_rx: MpscReceiver<Msg>,
     ) {
-        let disconnecting = Self::disconnecting(Arc::clone(&wrapped_client));
-        pin_mut!(disconnecting);
-        loop {
-            // Select between the next message and disconnecting
-            let msg = match future::select(subscription_rx.next(), disconnecting).await {
-                Either::Left((Some(msg), unresolved_disconnecting)) => {
-                    disconnecting = unresolved_disconnecting;
-                    msg
-                }
-                Either::Left((None, _)) => break,
-                Either::Right(((), _)) => break,
-            };
-
+        while let Some(msg) = subscription_rx.next().await {
             let mut client = wrapped_client.lock().await;
             let response_inbox = msg.subject().to_string();
             if let Some(mut requester_tx) = client.request_inbox_mapping.remove(&response_inbox) {
@@ -1066,6 +1054,13 @@ impl SyncClient {
         }
         // If we make it out of the above loop, we somehow disconnected
         let mut client = wrapped_client.lock().await;
+
+        // When we're disconnecting (even if we're going to reconnect), we should
+        // drop the request wildcard subscription here. Unsubscribe will not work
+        // at this point because the current connection state prevents this.
+        if let Some(request_wildcard_sid) = client.request_wildcard_subscription {
+            client.subscriptions.remove(&request_wildcard_sid);
+        }
 
         // If we are not in the disconnecting state, we did not intentionally disconnect
         // and should try to reconnect.
