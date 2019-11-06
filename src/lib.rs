@@ -844,6 +844,7 @@ impl SyncClient {
             if let Some(mut requester_tx) = client.request_inbox_mapping.remove(&msg.subject()) {
                 requester_tx.send(msg).await.unwrap_or_else(|err| {
                     warn!("Could not write response to pending request via mapping channel. Skipping! Err: {}", err);
+                    debug_assert!(false);
                 });
             }
         }
