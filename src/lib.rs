@@ -886,9 +886,7 @@ impl SyncClient {
             }
 
             let (tx, rx) = mpsc::channel(1);
-            client
-                .request_inbox_mapping
-                .insert(reply_to.clone(), tx);
+            client.request_inbox_mapping.insert(reply_to.clone(), tx);
             client
                 .publish_with_reply(subject, &reply_to, payload)
                 .await?;
