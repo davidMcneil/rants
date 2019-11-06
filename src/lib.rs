@@ -516,7 +516,7 @@ struct SyncClient {
     tcp_connect_timeout: Duration,
     delay_generator: DelayGenerator,
     subscriptions: HashMap<Sid, Subscription>,
-    request_inbox_mapping: HashMap<String, MpscSender<Msg>>,
+    request_inbox_mapping: HashMap<Subject, MpscSender<Msg>>,
     request_wildcard_subscription: Option<Sid>,
     request_base_inbox: String,
 }
@@ -841,8 +841,7 @@ impl SyncClient {
     ) {
         while let Some(msg) = subscription_rx.next().await {
             let mut client = wrapped_client.lock().await;
-            let response_inbox = msg.subject().to_string();
-            if let Some(mut requester_tx) = client.request_inbox_mapping.remove(&response_inbox) {
+            if let Some(mut requester_tx) = client.request_inbox_mapping.remove(&msg.subject()) {
                 requester_tx.send(msg).await.unwrap_or_else(|err| {
                     warn!("Could not write response to pending request via mapping channel. Skipping! Err: {}", err);
                 });
@@ -888,7 +887,7 @@ impl SyncClient {
             let (tx, rx) = mpsc::channel(1);
             client
                 .request_inbox_mapping
-                .insert(reply_to.to_string(), tx);
+                .insert(reply_to.clone(), tx);
             client
                 .publish_with_reply(subject, &reply_to, payload)
                 .await?;
@@ -905,7 +904,7 @@ impl SyncClient {
                 let mut client = wrapped_client.lock().await;
                 client
                     .request_inbox_mapping
-                    .remove(&reply_to.to_string())
+                    .remove(&reply_to)
                     .or_else(|| None);
                 Err(Error::NoResponse)
             }
