@@ -416,7 +416,7 @@ impl fmt::Display for ProtocolError {
 /// let subject = "foo.bar.*.>".parse::<Subject>();
 /// assert!(subject.is_ok());
 /// ```
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Subject {
     tokens: Vec<String>,
     full_wildcard: bool,

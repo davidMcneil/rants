@@ -41,7 +41,7 @@
 //!     let message = subscription.next().await.unwrap();
 //!     let message = String::from_utf8(message.into_payload()).unwrap();
 //!     println!("Received '{}'", message);
-//!     
+//!
 //!     // Disconnect from the server
 //!     client.disconnect().await;
 //! };
@@ -62,7 +62,7 @@ use futures::{
     lock::{Mutex, MutexGuard},
     stream::StreamExt,
 };
-use log::{debug, error, info, trace};
+use log::{debug, error, info, trace, warn};
 use owning_ref::{OwningRef, OwningRefMut};
 use pin_utils::pin_mut;
 use rand;
@@ -97,7 +97,9 @@ use crate::{
     },
 };
 
-pub use tokio::sync::{mpsc::Receiver as MpscReceiver, watch::Receiver as WatchReceiver};
+pub use tokio::sync::{
+    mpsc::Receiver as MpscReceiver, mpsc::Sender as MpscSender, watch::Receiver as WatchReceiver,
+};
 
 pub use crate::types::{
     error, Address, Authorization, ClientRef, ClientRefMut, ClientState, Connect, Info, Msg,
@@ -514,6 +516,9 @@ struct SyncClient {
     tcp_connect_timeout: Duration,
     delay_generator: DelayGenerator,
     subscriptions: HashMap<Sid, Subscription>,
+    request_inbox_mapping: HashMap<Subject, MpscSender<Msg>>,
+    request_wildcard_subscription: Option<Sid>,
+    request_base_inbox: String,
 }
 
 impl SyncClient {
@@ -549,6 +554,9 @@ impl SyncClient {
                 util::DEFAULT_COOL_DOWN,
             ),
             subscriptions: HashMap::new(),
+            request_inbox_mapping: HashMap::new(),
+            request_wildcard_subscription: None,
+            request_base_inbox: Uuid::new_v4().to_simple().to_string(),
         }
     }
 
@@ -827,23 +835,79 @@ impl SyncClient {
         }
     }
 
+    async fn request_wildcard_handler(
+        wrapped_client: Arc<Mutex<Self>>,
+        mut subscription_rx: MpscReceiver<Msg>,
+    ) {
+        while let Some(msg) = subscription_rx.next().await {
+            let mut client = wrapped_client.lock().await;
+            if let Some(mut requester_tx) = client.request_inbox_mapping.remove(&msg.subject()) {
+                requester_tx.send(msg).await.unwrap_or_else(|err| {
+                    warn!("Could not write response to pending request via mapping channel. Skipping! Err: {}", err);
+                    debug_assert!(false);
+                });
+            }
+        }
+
+        // At this point we are either disconnecting or we're in some
+        // strange state where the subscription's rx has been closed.
+        let mut client = wrapped_client.lock().await;
+        client.request_inbox_mapping.clear();
+        client.request_wildcard_subscription = None;
+    }
+
     async fn request(
         wrapped_client: Arc<Mutex<Self>>,
         subject: &Subject,
         payload: &[u8],
     ) -> Result<Msg> {
         let inbox_uuid = Uuid::new_v4();
-        let reply_to = format!("{}.{}", util::INBOX_PREFIX, inbox_uuid.to_simple()).parse()?;
-        let mut rx = {
+
+        let (mut rx, reply_to) = {
             let mut client = wrapped_client.lock().await;
-            let (sid, rx) = client.subscribe(&reply_to, 1).await?;
-            client.unsubscribe_with_max_msgs(sid, 1).await?;
+            let request_inbox = inbox_uuid.to_simple();
+            let reply_to: Subject = format!(
+                "{}.{}.{}",
+                util::INBOX_PREFIX,
+                client.request_base_inbox,
+                request_inbox
+            )
+            .parse()?;
+
+            // Only subscribe to the wildcard subscription when requested once!
+            if client.request_wildcard_subscription.is_none() {
+                let reply_to =
+                    format!("{}.{}.*", util::INBOX_PREFIX, client.request_base_inbox).parse()?;
+                let (sid, rx) = client.subscribe(&reply_to, 1024).await?;
+                client.request_wildcard_subscription = Some(sid);
+
+                // Spawn the task that watches the request wildcard receiver.
+                tokio::spawn(Self::request_wildcard_handler(wrapped_client.clone(), rx));
+            }
+
+            let (tx, rx) = mpsc::channel(1);
+            client.request_inbox_mapping.insert(reply_to.clone(), tx);
             client
                 .publish_with_reply(subject, &reply_to, payload)
                 .await?;
-            rx
+
+            (rx, reply_to)
         };
-        Ok(rx.next().await.ok_or(Error::NoResponse)?)
+
+        // Make sure we clean up on error (don't leave a dangling request
+        // inbox mapping reference. Adding an extra mutex here seems fine
+        // since this is the error path.
+        match rx.next().await {
+            Some(response) => Ok(response),
+            None => {
+                let mut client = wrapped_client.lock().await;
+                client
+                    .request_inbox_mapping
+                    .remove(&reply_to)
+                    .or_else(|| None);
+                Err(Error::NoResponse)
+            }
+        }
     }
 
     async fn subscribe(
@@ -876,11 +940,6 @@ impl SyncClient {
 
     async fn unsubscribe(&mut self, sid: Sid) -> Result<()> {
         self.unsubscribe_optional_max_msgs(sid, None).await
-    }
-
-    async fn unsubscribe_with_max_msgs(&mut self, sid: Sid, max_msgs: u64) -> Result<()> {
-        self.unsubscribe_optional_max_msgs(sid, Some(max_msgs))
-            .await
     }
 
     async fn unsubscribe_optional_max_msgs(
@@ -993,6 +1052,13 @@ impl SyncClient {
         }
         // If we make it out of the above loop, we somehow disconnected
         let mut client = wrapped_client.lock().await;
+
+        // When we're disconnecting (even if we're going to reconnect), we should
+        // drop the request wildcard subscription here. Unsubscribe will not work
+        // at this point because the current connection state prevents this.
+        if let Some(request_wildcard_sid) = client.request_wildcard_subscription {
+            client.subscriptions.remove(&request_wildcard_sid);
+        }
 
         // If we are not in the disconnecting state, we did not intentionally disconnect
         // and should try to reconnect.
