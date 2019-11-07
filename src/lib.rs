@@ -846,6 +846,11 @@ impl SyncClient {
                     warn!("Could not write response to pending request via mapping channel. Skipping! Err: {}", err);
                     debug_assert!(false);
                 });
+            } else {
+                warn!(
+                    "Could not find response channel for request with subject: {}",
+                    &msg.subject()
+                );
             }
         }
 
