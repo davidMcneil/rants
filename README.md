@@ -70,7 +70,7 @@ The [`env_logger`](https://github.com/sebasmagri/env_logger/) crate is used in i
 - [ ] Increase test coverage
 - [ ] TLS support
 - [ ] Explore automatically disconnecting the client when it is dropped
-- [ ] Support improved [request-reply](https://github.com/nats-io/nats.go/issues/294) implementation
+- [x] Support improved [request-reply](https://github.com/nats-io/nats.go/issues/294) implementation
 - [ ] Benchmarks and performance
 
 ## Alternatives
