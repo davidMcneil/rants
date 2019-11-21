@@ -7,8 +7,6 @@
 
 An async [NATS](https://nats.io/) client library for the Rust programming language.
 
-**Note:** Currently, `rants` requires a nightly version of the Rust compiler due to its use of `async`/`await` syntax, but it should work on stable [soon](https://areweasyncyet.rs/)!
-
 The client aims to be an ergonomic, yet thin, wrapper over the NATS client protocol. The easiest way to learn to use the client is by reading the [NATS client protocol documentation](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html). The main entry point into the library's API is the [`Client`](https://docs.rs/rants/latest/rants/struct.Client.html) struct.
 
 # Example
