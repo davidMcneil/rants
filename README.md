@@ -63,14 +63,6 @@ The [`env_logger`](https://github.com/sebasmagri/env_logger/) crate is used in i
 
     > RUST_LOG=rants=trace cargo test ping_pong
 
-## Roadmap
-
-- [ ] Increase test coverage
-- [ ] TLS support
-- [ ] Explore automatically disconnecting the client when it is dropped
-- [x] Support improved [request-reply](https://github.com/nats-io/nats.go/issues/294) implementation
-- [ ] Benchmarks and performance
-
 ## Alternatives
 
 - [`rust-nats`](https://github.com/jedisct1/rust-nats)
