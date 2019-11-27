@@ -55,11 +55,13 @@ runtime.shutdown_on_idle();
 
 ## Development
 
-The integration test suite requires the [NATS server](https://nats.io/download/nats-io/nats-server/) to be reachable at `127.0.0.1:4222`:
+The integration test suite requires the `NATS_PATH` environment variable point to the [NATS server executable](https://nats.io/download/nats-io/nats-server/):
 
     > cargo test
 
-The [`env_logger`](https://github.com/sebasmagri/env_logger/) crate is used in integration test. To enable it and run a single test run:
+The `NATS_NO_CAPTURE` environment variable can be set to see the output of the NATS server. Useful for debugging.
+
+The [`env_logger`](https://github.com/sebasmagri/env_logger/) crate is used in integration tests. To enable it and run a single test run:
 
     > RUST_LOG=rants=trace cargo test ping_pong
 

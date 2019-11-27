@@ -46,5 +46,5 @@ async fn main() {
 
 #[test]
 fn reconnect() {
-    common::run_integration_test(main());
+    common::run_integration_test(main(), &[]);
 }

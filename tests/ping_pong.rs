@@ -21,5 +21,5 @@ async fn main() {
 
 #[test]
 fn ping_pong() {
-    common::run_integration_test(main());
+    common::run_integration_test(main(), &[]);
 }

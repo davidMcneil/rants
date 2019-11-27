@@ -39,5 +39,5 @@ async fn main() {
 
 #[test]
 fn wild_card_subject() {
-    common::run_integration_test(main());
+    common::run_integration_test(main(), &[]);
 }

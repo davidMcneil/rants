@@ -55,5 +55,5 @@ async fn main() {
 
 #[test]
 fn echo() {
-    common::run_integration_test(main());
+    common::run_integration_test(main(), &[]);
 }

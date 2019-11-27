@@ -45,5 +45,5 @@ async fn main() {
 
 #[test]
 fn request() {
-    common::run_integration_test(main());
+    common::run_integration_test(main(), &[]);
 }

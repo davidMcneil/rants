@@ -9,7 +9,7 @@
 //! The main entry point into the library's API is the [`Client`](struct.Client.html) struct.
 //!
 //! # Example
-//!  ```rust
+//!  ```rust no_run
 //! use futures::stream::StreamExt;
 //! use rants::Client;
 //! use tokio::runtime::Runtime;
