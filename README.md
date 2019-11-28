@@ -14,9 +14,9 @@ The client aims to be an ergonomic, yet thin, wrapper over the NATS client proto
 ```rust
 use futures::stream::StreamExt;
 use rants::Client;
-use tokio::runtime::Runtime;
 
-let main_future = async {
+#[tokio::main]
+async fn main() {
    // A NATS server must be running on `127.0.0.1:4222`
    let address = "127.0.0.1:4222".parse().unwrap();
    let client = Client::new(vec![address]);
@@ -47,10 +47,6 @@ let main_future = async {
    // Disconnect from the server
    client.disconnect().await;
 };
-
-let runtime = Runtime::new().expect("to create Runtime");
-runtime.spawn(main_future);
-runtime.shutdown_on_idle();
 ```
 
 ## Development
@@ -58,8 +54,6 @@ runtime.shutdown_on_idle();
 The integration test suite requires the `NATS_PATH` environment variable point to the [NATS server executable](https://nats.io/download/nats-io/nats-server/):
 
     > cargo test
-
-The `NATS_NO_CAPTURE` environment variable can be set to see the output of the NATS server. Useful for debugging.
 
 The [`env_logger`](https://github.com/sebasmagri/env_logger/) crate is used in integration tests. To enable it and run a single test run:
 

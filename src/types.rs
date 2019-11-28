@@ -315,7 +315,7 @@ impl Default for Connect {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// The [`-ERR`](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#okerr) messages sent from the server
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ProtocolError {
     /// Unknown protocol error
     UnknownProtocolOperation,

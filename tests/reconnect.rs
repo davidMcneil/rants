@@ -1,9 +1,14 @@
 mod common;
 
+use common::NatsServer;
 use futures::stream::StreamExt;
 use rants::Client;
 
-async fn main() {
+#[tokio::test(threaded_scheduler)]
+async fn reconnect() {
+    common::init();
+    let _nats_server = NatsServer::new(&[]).await;
+
     let address = "127.0.0.1".parse().unwrap();
     let client = Client::new(vec![address]);
     client.connect_mut().await.echo(true);
@@ -42,9 +47,4 @@ async fn main() {
     std::mem::drop(client);
 
     assert!(subscription.next().await.is_none());
-}
-
-#[test]
-fn reconnect() {
-    common::run_integration_test(main(), &[]);
 }

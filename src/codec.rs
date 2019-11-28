@@ -5,7 +5,7 @@ mod tests;
 use bytes::{BufMut, BytesMut};
 use log::trace;
 use std::{io, mem, str, usize};
-use tokio::codec::Decoder;
+use tokio_util::codec::Decoder;
 
 use crate::{
     types::{

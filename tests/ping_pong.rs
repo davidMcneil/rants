@@ -1,8 +1,13 @@
 mod common;
 
+use common::NatsServer;
 use rants::Client;
 
-async fn main() {
+#[tokio::test(threaded_scheduler)]
+async fn ping_pong() {
+    common::init();
+    let _nats_server = NatsServer::new(&[]).await;
+
     let address = "127.0.0.1".parse().unwrap();
     let client = Client::new(vec![address]);
 
@@ -17,9 +22,4 @@ async fn main() {
     assert!(ping_pong.is_ok());
 
     client.disconnect().await;
-}
-
-#[test]
-fn ping_pong() {
-    common::run_integration_test(main(), &[]);
 }

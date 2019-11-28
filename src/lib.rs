@@ -1,8 +1,5 @@
 //! An async [NATS](https://nats.io/) client library for the Rust programming language.
 //!
-//! **Note:** Currently, `rants` requires a nightly version of the Rust compiler due to its use of
-//! `async`/`await` syntax, but it should work on stable [soon](https://areweasyncyet.rs/)!
-//!
 //! The client aims to be an ergonomic, yet thin, wrapper over the NATS client protocol. The
 //! easiest way to learn to use the client is by reading the
 //! [NATS client protocol documentation](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html).
@@ -12,9 +9,9 @@
 //!  ```rust no_run
 //! use futures::stream::StreamExt;
 //! use rants::Client;
-//! use tokio::runtime::Runtime;
 //!
-//! let main_future = async {
+//! #[tokio::main]
+//! async fn main() {
 //!     // A NATS server must be running on `127.0.0.1:4222`
 //!     let address = "127.0.0.1:4222".parse().unwrap();
 //!     let client = Client::new(vec![address]);
@@ -44,11 +41,7 @@
 //!
 //!     // Disconnect from the server
 //!     client.disconnect().await;
-//! };
-//!
-//! let runtime = Runtime::new().expect("to create Runtime");
-//! runtime.spawn(main_future);
-//! runtime.shutdown_on_idle();
+//! }
 //! ```
 
 mod codec;
@@ -67,25 +60,17 @@ use owning_ref::{OwningRef, OwningRefMut};
 use pin_utils::pin_mut;
 use rand;
 use rand::seq::SliceRandom;
-use std::{
-    collections::HashMap,
-    io::ErrorKind,
-    mem,
-    net::Shutdown,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, io::ErrorKind, mem, net::Shutdown, sync::Arc, time::Duration};
 use tokio::{
-    codec::FramedRead,
-    io::AsyncWriteExt,
-    net::tcp::TcpStream,
+    io::{self, AsyncWriteExt, ReadHalf, WriteHalf},
+    net::TcpStream,
     sync::{
         mpsc, oneshot,
         watch::{self, Sender as WatchSender},
     },
-    timer::{self, Timeout},
+    time,
 };
-use tokio_io::split::{self, ReadHalf, WriteHalf};
+use tokio_util::codec::FramedRead;
 use uuid::Uuid;
 
 use crate::{
@@ -561,7 +546,7 @@ impl SyncClient {
     }
 
     fn state(&self) -> ClientState {
-        self.state_rx.get_ref().clone()
+        self.state_rx.borrow().clone()
     }
 
     fn state_stream(&self) -> WatchReceiver<ClientState> {
@@ -569,7 +554,7 @@ impl SyncClient {
     }
 
     pub fn info(&self) -> Info {
-        self.info_rx.get_ref().clone()
+        self.info_rx.borrow().clone()
     }
 
     fn connect_mut(&mut self) -> &mut Connect {
@@ -620,7 +605,7 @@ impl SyncClient {
             let mut addresses = client
                 .addresses
                 .iter()
-                .chain(client.info_rx.get_ref().connect_urls().iter())
+                .chain(client.info_rx.borrow().connect_urls().iter())
                 .cloned()
                 .collect::<Vec<_>>();
             let addresses_len = addresses.len() as u64;
@@ -644,7 +629,7 @@ impl SyncClient {
                     connect_attempts,
                     addresses_len
                 );
-                timer::delay(Instant::now() + delay).await;
+                time::delay_for(delay).await;
             }
             connect_attempts += 1;
 
@@ -675,16 +660,16 @@ impl SyncClient {
             client.state_transition(StateTransition::ToConnecting(address.clone()));
 
             // Try to establish a TCP connection
-            let connect = Timeout::new(
-                TcpStream::connect(address.address()),
+            let connect = time::timeout(
                 client.tcp_connect_timeout,
+                TcpStream::connect(address.address()),
             );
             let (reader, mut writer) = match connect.await {
                 Ok(Ok(sink_and_stream)) => {
                     // TODO: Currently, we use the generic io split in order to avoid lifetime
                     // complications. However, `TcpStream` does implement a specialized split. It
                     // may be worth switching to the specialized version to avoid overhead.
-                    split::split(sink_and_stream)
+                    io::split(sink_and_stream)
                 }
                 Ok(Err(e)) => {
                     error!("Failed to connect to '{}', err: {}", address, e);
@@ -699,7 +684,7 @@ impl SyncClient {
             let mut reader = FramedRead::new(reader, Codec::new());
 
             // Wait for the first server message. It should always be an info message.
-            let wait_for_info = Timeout::new(reader.next(), client.tcp_connect_timeout);
+            let wait_for_info = time::timeout(client.tcp_connect_timeout, reader.next());
             match wait_for_info.await {
                 Ok(Some(Ok(Ok(message)))) => {
                     if let ServerMessage::Info(info) = message {

@@ -1,9 +1,14 @@
 mod common;
 
+use common::NatsServer;
 use futures::{future, stream::StreamExt};
 use rants::Client;
 
-async fn main() {
+#[tokio::test(threaded_scheduler)]
+async fn echo() {
+    common::init();
+    let _nats_server = NatsServer::new(&[]).await;
+
     let number_of_messages = 1024;
 
     // Create a new client
@@ -37,7 +42,7 @@ async fn main() {
 
     // Check all messages received from the subscription
     let mut messages = subscription
-        .take(number_of_messages as u64)
+        .take(number_of_messages)
         .map(|msg| {
             String::from_utf8(msg.into_payload())
                 .unwrap()
@@ -51,9 +56,4 @@ async fn main() {
 
     // Disconnect
     client.disconnect().await;
-}
-
-#[test]
-fn echo() {
-    common::run_integration_test(main(), &[]);
 }

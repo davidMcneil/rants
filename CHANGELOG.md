@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Update `tokio`, `futures`, and `bytes` dependencies
 - Use single subject for request-reply pattern, see more details on the design [here](https://github.com/nats-io/nats.go/issues/294)
 
 ## [0.3.1] - 2019-10-07

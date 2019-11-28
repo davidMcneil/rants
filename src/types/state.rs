@@ -1,6 +1,5 @@
 use std::fmt;
-use tokio::net::TcpStream;
-use tokio_io::split::WriteHalf;
+use tokio::{io::WriteHalf, net::TcpStream};
 
 use crate::types::Address;
 
