@@ -14,7 +14,7 @@ pub const NATS_NETWORK_SCHEME: &str = "nats";
 pub const NETWORK_SCHEME_SEPARATOR: &str = "://";
 pub const AUTHORIZATION_SEPARATOR: &str = "@";
 pub const USERNAME_PASSWORD_SEPARATOR: &str = ":";
-pub const IP_ADDR_PORT_SEPARATOR: char = ':';
+pub const DOMAIN_PORT_SEPARATOR: &str = ":";
 
 // Subject special characters
 pub const SUBJECT_TOKEN_DELIMITER: &str = ".";
@@ -53,3 +53,48 @@ pub const INVALID_SUBJECT: &str = "Invalid Subject";
 pub const PERMISSIONS_VIOLATION_FOR_SUBSCRIPTION: &str =
     "Permissions Violation for Subscription to";
 pub const PERMISSIONS_VIOLATION_FOR_PUBLISH: &str = "Permissions Violation for Publish to";
+
+pub fn split_after<'a>(s: &'a str, pat: &str) -> (&'a str, Option<&'a str>) {
+    let mut splitter = s.splitn(2, pat);
+    let first = splitter.next().expect("always at least one split");
+    let rest = splitter.next();
+    (first, rest)
+}
+
+pub fn split_before<'a>(s: &'a str, pat: &str) -> (Option<&'a str>, &'a str) {
+    match split_after(s, pat) {
+        (first, None) => (None, first),
+        (first, Some(rest)) => (Some(first), rest),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_split_after() {
+        assert_eq!(
+            split_after("first:second:third", ":"),
+            ("first", Some("second:third"))
+        );
+        assert_eq!(split_after("first:", ":"), ("first", Some("")));
+        assert_eq!(split_after(":second", ":"), ("", Some("second")));
+        assert_eq!(split_after("none", ":"), ("none", None));
+        assert_eq!(split_after("", ":"), ("", None));
+        assert_eq!(split_after("test", "test"), ("", Some("")));
+    }
+
+    #[test]
+    fn test_split_before() {
+        assert_eq!(
+            split_before("first:second:third", ":"),
+            (Some("first"), "second:third")
+        );
+        assert_eq!(split_before("first:", ":"), (Some("first"), ""));
+        assert_eq!(split_before(":second", ":"), (Some(""), "second"));
+        assert_eq!(split_before("none", ":"), (None, "none"));
+        assert_eq!(split_before("", ":"), (None, ""));
+        assert_eq!(split_before("test", "test"), (Some(""), ""));
+    }
+}

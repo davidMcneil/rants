@@ -1,14 +1,15 @@
 mod common;
 
 use common::NatsServer;
-use rants::Client;
+use hostname;
+use rants::{Address, Client};
 
 #[tokio::test(threaded_scheduler)]
 async fn ping_pong() {
     common::init();
-    let _nats_server = NatsServer::new(&[]).await;
+    let _nats_server = NatsServer::new(&["--port=5678"]).await;
 
-    let address = "127.0.0.1".parse().unwrap();
+    let address = Address::new(&hostname::get().unwrap().to_string_lossy(), 5678, None);
     let client = Client::new(vec![address]);
 
     assert!(client.state().await.is_disconnected());

@@ -9,7 +9,9 @@ mod tests;
 use log::trace;
 use serde::{Deserialize, Serialize};
 use std::{
+    convert::Infallible,
     fmt,
+    str::FromStr,
     sync::atomic::{AtomicU64, Ordering},
 };
 use tokio::sync::mpsc::Sender as MpscSender;
@@ -149,6 +151,19 @@ impl Authorization {
     /// Create a `Authorization::UsernamePassword`
     pub fn username_password(username: String, password: String) -> Self {
         Authorization::UsernamePassword { username, password }
+    }
+}
+
+impl FromStr for Authorization {
+    type Err = Infallible;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match util::split_after(s, util::USERNAME_PASSWORD_SEPARATOR) {
+            (token, None) => Ok(Authorization::token(String::from(token))),
+            (username, Some(password)) => Ok(Authorization::username_password(
+                String::from(username),
+                String::from(password),
+            )),
+        }
     }
 }
 

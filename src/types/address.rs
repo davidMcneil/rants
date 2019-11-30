@@ -1,23 +1,20 @@
 use serde::{de, Deserialize, Deserializer};
-use std::{
-    convert::Infallible,
-    fmt,
-    net::{AddrParseError, SocketAddr},
-    str::FromStr,
-};
+use std::{fmt, str::FromStr};
 
 use super::Authorization;
 use crate::{types::error::Error, util};
 
 /// An address used to connect to a NATS server
 ///
-/// An `Address` consists of an [`Authorization`](enum.Authorization.html) and a `SocketAddr`.
+/// An `Address` consists of a domain, a port number, and an optional
+/// [`Authorization`](enum.Authorization.html). The domain can simply be the string representation
+/// of an IP address or a true domain name that will be resolved through DNS.
 ///
 /// The string representation of an `Address` can take the following forms:
-/// * `nats://<username>:<password>@<ip_address>:<port>`
-/// * `nats://<token>@<ip_address>:<port>`
+/// * `nats://<username>:<password>@<domain>:<port>`
+/// * `nats://<token>@<domain>:<port>`
 ///
-/// The only required part of the address string is the `<ip_address>`. This makes the simplest
+/// The only required part of the address string is the `<domain>`. This makes the simplest
 /// address solely an IP address (eg `127.0.0.1`). If no port is specified the default, port `4222`,
 ///  is used.
 ///
@@ -38,22 +35,34 @@ use crate::{types::error::Error, util};
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct Address {
-    address: SocketAddr,
+    domain: String,
+    port: u16,
     authorization: Option<Authorization>,
 }
 
 impl Address {
     /// Create a new `Address`
-    pub fn new(address: SocketAddr, authorization: Option<Authorization>) -> Self {
+    pub fn new(domain: &str, port: u16, authorization: Option<Authorization>) -> Self {
         Self {
-            address,
+            domain: String::from(domain),
+            port,
             authorization,
         }
     }
 
-    /// Get the `Address`'s `SocketAddr`
-    pub fn address(&self) -> SocketAddr {
-        self.address
+    /// Get the `Address`'s domain
+    pub fn domain(&self) -> &str {
+        &self.domain
+    }
+
+    /// Get the `Address`'s port
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Get the `Address`'s domain and port
+    pub fn address(&self) -> (&str, u16) {
+        (&self.domain, self.port())
     }
 
     /// Get the `Address`'s [`Authorization`](enum.Authorization.html)
@@ -67,64 +76,49 @@ impl fmt::Display for Address {
         if let Some(authorization) = &self.authorization {
             write!(f, "{}{}", authorization, util::AUTHORIZATION_SEPARATOR)?;
         }
-        write!(f, "{}", self.address)?;
+        write!(f, "{}:{}", self.domain, self.port)?;
         Ok(())
     }
-}
-
-fn split_once<'a>(s: &'a str, pat: &str) -> (Option<&'a str>, &'a str) {
-    let mut splitter = s.splitn(2, pat);
-    let first = splitter.next().expect("always at least one split");
-    let rest = splitter.next();
-    match (first, rest) {
-        (first, None) => (None, first),
-        (first, Some(rest)) => (Some(first), rest),
-    }
-}
-
-impl FromStr for Authorization {
-    type Err = Infallible;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match split_once(s, util::USERNAME_PASSWORD_SEPARATOR) {
-            (None, token) => Ok(Authorization::token(String::from(token))),
-            (Some(username), password) => Ok(Authorization::username_password(
-                String::from(username),
-                String::from(password),
-            )),
-        }
-    }
-}
-
-fn parse_ip_and_maybe_port(s: &str) -> std::result::Result<SocketAddr, AddrParseError> {
-    // If the string to parse does not contain a ':', it does not have a port
-    Ok(if s.contains(util::IP_ADDR_PORT_SEPARATOR) {
-        s.parse()?
-    } else {
-        let ip = s.parse()?;
-        SocketAddr::new(ip, util::NATS_DEFAULT_PORT)
-    })
 }
 
 impl FromStr for Address {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Parse the protocol
-        let (maybe_protocol, s) = split_once(s, util::NETWORK_SCHEME_SEPARATOR);
+        let (maybe_protocol, rest) = util::split_before(s, util::NETWORK_SCHEME_SEPARATOR);
         if let Some(protocol) = maybe_protocol {
             if protocol != util::NATS_NETWORK_SCHEME {
                 return Err(Error::InvalidNetworkScheme(String::from(protocol)));
             }
         }
-        // Split apart the authorization and the address
-        let (maybe_authorization, ip_and_maybe_port) = split_once(s, util::AUTHORIZATION_SEPARATOR);
-        let address = parse_ip_and_maybe_port(ip_and_maybe_port)
-            .map_err(|_| Error::InvalidAddress(String::from(s)))?;
+
+        if rest.is_empty() {
+            return Err(Error::InvalidAddress(String::from(s)));
+        }
+
+        // Parse the authorization
+        let (maybe_authorization, rest) = util::split_before(rest, util::AUTHORIZATION_SEPARATOR);
         let authorization =
             maybe_authorization.map(|s| s.parse().expect("parsing authorization is infallible"));
-        Ok(Address {
-            address,
-            authorization,
-        })
+
+        if rest.is_empty() {
+            return Err(Error::InvalidAddress(String::from(s)));
+        }
+
+        // Parse the domain and port
+        let (domain, maybe_port) = util::split_after(rest, util::DOMAIN_PORT_SEPARATOR);
+        if domain.is_empty() {
+            return Err(Error::InvalidAddress(String::from(s)));
+        }
+        let port = if let Some(maybe_port) = maybe_port {
+            maybe_port
+                .parse()
+                .map_err(|_| Error::InvalidAddress(String::from(s)))?
+        } else {
+            util::NATS_DEFAULT_PORT
+        };
+
+        Ok(Address::new(domain, port, authorization))
     }
 }
 
@@ -141,66 +135,96 @@ impl<'de> Deserialize<'de> for Address {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn test_split_once() {
-        assert_eq!(
-            split_once("first:second:third", ":"),
-            (Some("first"), "second:third")
-        );
-        assert_eq!(split_once("first:", ":"), (Some("first"), ""));
-        assert_eq!(split_once(":second", ":"), (Some(""), "second"));
-        assert_eq!(split_once("none", ":"), (None, "none"));
-        assert_eq!(split_once("", ":"), (None, ""));
-        assert_eq!(split_once("test", "test"), (Some(""), ""));
-    }
 
     #[test]
     fn parse_address() {
         let a = "nats://127.0.0.1:90".parse::<Address>().unwrap();
+        assert_eq!(a.domain(), "127.0.0.1");
+        assert_eq!(a.port(), 90);
+        assert!(a.authorization().is_none());
         assert_eq!(&a.to_string(), "127.0.0.1:90");
-        assert!(a.authorization.is_none());
-        assert_eq!(a.address.port(), 90);
+
         let a = "127.0.0.1".parse::<Address>().unwrap();
-        assert!(a.authorization.is_none());
-        assert_eq!(a.address.port(), 4222);
+        assert_eq!(a.domain(), "127.0.0.1");
+        assert_eq!(a.port(), 4222);
+        assert!(a.authorization().is_none());
+        assert_eq!(&a.to_string(), "127.0.0.1:4222");
+
         let a = "nats://127.0.0.1".parse::<Address>().unwrap();
-        assert!(a.authorization.is_none());
-        assert_eq!(a.address.port(), 4222);
+        assert_eq!(a.domain(), "127.0.0.1");
+        assert_eq!(a.port(), 4222);
+        assert!(a.authorization().is_none());
+        assert_eq!(&a.to_string(), "127.0.0.1:4222");
+
         let a = "username:password@127.0.0.1:1023"
             .parse::<Address>()
             .unwrap();
-        assert_eq!(&a.to_string(), "username:password@127.0.0.1:1023");
+        assert_eq!(a.domain(), "127.0.0.1");
+        assert_eq!(a.port(), 1023);
         assert_eq!(
-            a.authorization.unwrap(),
+            *a.authorization().unwrap(),
             Authorization::username_password(String::from("username"), String::from("password"))
         );
-        assert_eq!(a.address.port(), 1023);
-        let a = "nats://token@127.0.0.1".parse::<Address>().unwrap();
-        assert_eq!(&a.to_string(), "token@127.0.0.1:4222");
+        assert_eq!(&a.to_string(), "username:password@127.0.0.1:1023");
+
+        let a = "nats://token@my-machine".parse::<Address>().unwrap();
+        assert_eq!(a.domain(), "my-machine");
+        assert_eq!(a.port(), 4222);
         assert_eq!(
-            a.authorization.unwrap(),
+            *a.authorization().unwrap(),
             Authorization::token(String::from("token"))
         );
-        assert_eq!(a.address.port(), 4222);
-        let a = "username:@127.0.0.1:80".parse::<Address>().unwrap();
+        assert_eq!(&a.to_string(), "token@my-machine:4222");
+
+        let a = "username:@some.domain.com:80".parse::<Address>().unwrap();
+        assert_eq!(a.domain(), "some.domain.com");
+        assert_eq!(a.port(), 80);
         assert_eq!(
-            a.authorization.unwrap(),
+            *a.authorization().unwrap(),
             Authorization::username_password(String::from("username"), String::from(""))
         );
-        assert_eq!(a.address.port(), 80);
-        let a = "@127.0.0.1:80".parse::<Address>().unwrap();
+        assert_eq!(&a.to_string(), "username:@some.domain.com:80");
+
+        let a = "@another.domain:80".parse::<Address>().unwrap();
+        assert_eq!(a.domain(), "another.domain");
+        assert_eq!(a.port(), 80);
         assert_eq!(
-            a.authorization.unwrap(),
+            *a.authorization().unwrap(),
             Authorization::token(String::from(""))
         );
+        assert_eq!(&a.to_string(), "@another.domain:80");
+
         let a = "0.0.0.0:56".parse::<Address>().unwrap();
-        assert_eq!(a.address.port(), 56);
+        assert_eq!(a.domain(), "0.0.0.0");
+        assert_eq!(a.port(), 56);
+        assert!(a.authorization().is_none());
+        assert_eq!(&a.to_string(), "0.0.0.0:56");
+
+        let a = "nats://this_is_a_domain".parse::<Address>().unwrap();
+        assert_eq!(a.domain(), "this_is_a_domain");
+        assert_eq!(a.port(), 4222);
+        assert!(a.authorization().is_none());
+        assert_eq!(&a.to_string(), "this_is_a_domain:4222");
 
         let a = "http://127.0.0.1:90".parse::<Address>();
         assert!(a.is_err());
+
         let a = "token@".parse::<Address>();
         assert!(a.is_err());
-        let a = "nats:://this_is_bad".parse::<Address>();
+
+        let a = "".parse::<Address>();
+        assert!(a.is_err());
+
+        let a = ":1234".parse::<Address>();
+        assert!(a.is_err());
+
+        let a = "domain:".parse::<Address>();
+        assert!(a.is_err());
+
+        let a = "domain:100000".parse::<Address>();
+        assert!(a.is_err());
+
+        let a = "domain:bad".parse::<Address>();
         assert!(a.is_err());
     }
 }

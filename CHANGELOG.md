@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Allow `Address`to be looked up through DNS
+
 ### Changed
 
+- Address is not based on `SocketAddr`
 - Update `tokio`, `futures`, and `bytes` dependencies
 - Use single subject for request-reply pattern, see more details on the design [here](https://github.com/nats-io/nats.go/issues/294)
 
