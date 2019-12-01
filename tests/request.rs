@@ -22,11 +22,15 @@ async fn make_subscription(client: Client, subject: &Subject) {
 #[tokio::test(threaded_scheduler)]
 async fn request() {
     common::init();
-    let _nats_server = NatsServer::new(&[]).await;
+    let _nats_server = NatsServer::new(&["--auth=abc123"]).await;
 
     let address = "127.0.0.1".parse().unwrap();
     let client = Client::new(vec![address]);
-    client.connect_mut().await.echo(true);
+    client
+        .connect_mut()
+        .await
+        .echo(true)
+        .token(String::from("abc123"));
     client.connect().await;
 
     // Spawn a few subscription tasks to send the reply

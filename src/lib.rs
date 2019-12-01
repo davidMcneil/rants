@@ -725,6 +725,55 @@ impl SyncClient {
                 continue;
             }
 
+            // Perform a ping-pong to verify the connection was established
+            if let Err(e) = Self::ping_with_writer(&mut writer).await {
+                error!("Failed to send ping when verifying connection, err: {}", e);
+                continue;
+            }
+            // Wait for the second server message. It should always be a pong message if the
+            // connection was successful.
+            let wait_for_pong = time::timeout(client.tcp_connect_timeout, reader.next());
+            match wait_for_pong.await {
+                Ok(Some(Ok(Ok(message)))) => match message {
+                    ServerMessage::Pong => (),
+                    ServerMessage::Err(e) => {
+                        error!(
+                            "Protocol error when verifying connection with ping-pong, err: {}",
+                            e
+                        );
+                        continue;
+                    }
+                    ServerMessage::Info(_)
+                    | ServerMessage::Msg(_)
+                    | ServerMessage::Ping
+                    | ServerMessage::Ok => {
+                        error!(
+                            "Second message should be {} instead received '{:?}'",
+                            util::PONG_OP_NAME,
+                            message
+                        );
+                        debug_assert!(false);
+                        continue;
+                    }
+                },
+                Ok(Some(Ok(Err(e)))) => {
+                    error!("Received invalid server message, err: {}", e);
+                    continue;
+                }
+                Ok(Some(Err(e))) => {
+                    error!("TCP socket error, err: {}", e);
+                    continue;
+                }
+                Ok(None) => {
+                    error!("TCP socket was disconnected");
+                    continue;
+                }
+                Err(_) => {
+                    error!("Timed out waiting for {} message", util::PONG_OP_NAME);
+                    continue;
+                }
+            }
+
             // Resubscribe to subscriptions
             let mut failed_to_resubscribe = Vec::new();
             for (sid, subscription) in &client.subscriptions {
@@ -976,7 +1025,7 @@ impl SyncClient {
 
     async fn ping(&mut self) -> Result<()> {
         if let ConnectionState::Connected(_, writer) = &mut self.state {
-            Self::write_line(writer, ClientControl::Ping).await?;
+            Self::ping_with_writer(writer).await?;
             Ok(())
         } else {
             Err(Error::NotConnected)
@@ -1201,8 +1250,11 @@ impl SyncClient {
         if let Some(authorization) = address.authorization() {
             connect.set_authorization(Some(authorization.clone()));
         }
-        Self::write_line(writer, ClientControl::Connect(&connect)).await?;
-        Ok(())
+        Self::write_line(writer, ClientControl::Connect(&connect)).await
+    }
+
+    async fn ping_with_writer(writer: &mut WriteHalf<TcpStream>) -> Result<()> {
+        Self::write_line(writer, ClientControl::Ping).await
     }
 
     fn state_transition(&mut self, transition: StateTransition) -> StateTransitionResult {
