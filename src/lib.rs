@@ -91,6 +91,8 @@ pub use crate::types::{
     ProtocolError, Sid, Subject, Subscription,
 };
 
+const TCP_SOCKET_DISCONNECTED_MESSAGE: &str = "TCP socket was disconnected";
+
 /// The type of a [`Client`](struct.Client.html)'s [`delay_generator_mut`](struct.Client.html#method.delay_generator_mut)
 ///
 /// # Arguments
@@ -686,29 +688,25 @@ impl SyncClient {
             // Wait for the first server message. It should always be an info message.
             let wait_for_info = time::timeout(client.tcp_connect_timeout, reader.next());
             match wait_for_info.await {
-                Ok(Some(Ok(Ok(message)))) => {
-                    if let ServerMessage::Info(info) = message {
-                        client.handle_info_message(info);
+                Ok(Some(wrapped_message)) => {
+                    if let Some(message) = Self::unwrap_server_message(wrapped_message) {
+                        if let ServerMessage::Info(info) = message {
+                            client.handle_info_message(info);
+                        } else {
+                            error!(
+                                "First message should be {} instead received '{:?}'",
+                                util::INFO_OP_NAME,
+                                message
+                            );
+                            debug_assert!(false);
+                            continue;
+                        }
                     } else {
-                        error!(
-                            "First message should be {} instead received '{:?}'",
-                            util::INFO_OP_NAME,
-                            message
-                        );
-                        debug_assert!(false);
                         continue;
                     }
                 }
-                Ok(Some(Ok(Err(e)))) => {
-                    error!("Received invalid server message, err: {}", e);
-                    continue;
-                }
-                Ok(Some(Err(e))) => {
-                    error!("TCP socket error, err: {}", e);
-                    continue;
-                }
                 Ok(None) => {
-                    error!("TCP socket was disconnected");
+                    error!("{}", TCP_SOCKET_DISCONNECTED_MESSAGE);
                     continue;
                 }
                 Err(_) => {
@@ -734,38 +732,36 @@ impl SyncClient {
             // connection was successful.
             let wait_for_pong = time::timeout(client.tcp_connect_timeout, reader.next());
             match wait_for_pong.await {
-                Ok(Some(Ok(Ok(message)))) => match message {
-                    ServerMessage::Pong => (),
-                    ServerMessage::Err(e) => {
-                        error!(
-                            "Protocol error when verifying connection with ping-pong, err: {}",
-                            e
-                        );
+                Ok(Some(wrapped_message)) => {
+                    if let Some(message) = Self::unwrap_server_message(wrapped_message) {
+                        match message {
+                            ServerMessage::Pong => (),
+                            ServerMessage::Err(e) => {
+                                error!(
+                                    "Protocol error when verifying connection with ping-pong, err: {}",
+                                    e
+                                );
+                                continue;
+                            }
+                            ServerMessage::Info(_)
+                            | ServerMessage::Msg(_)
+                            | ServerMessage::Ping
+                            | ServerMessage::Ok => {
+                                error!(
+                                    "Second message should be {} instead received '{:?}'",
+                                    util::PONG_OP_NAME,
+                                    message
+                                );
+                                debug_assert!(false);
+                                continue;
+                            }
+                        }
+                    } else {
                         continue;
                     }
-                    ServerMessage::Info(_)
-                    | ServerMessage::Msg(_)
-                    | ServerMessage::Ping
-                    | ServerMessage::Ok => {
-                        error!(
-                            "Second message should be {} instead received '{:?}'",
-                            util::PONG_OP_NAME,
-                            message
-                        );
-                        debug_assert!(false);
-                        continue;
-                    }
-                },
-                Ok(Some(Ok(Err(e)))) => {
-                    error!("Received invalid server message, err: {}", e);
-                    continue;
-                }
-                Ok(Some(Err(e))) => {
-                    error!("TCP socket error, err: {}", e);
-                    continue;
                 }
                 Ok(None) => {
-                    error!("TCP socket was disconnected");
+                    error!("{}", TCP_SOCKET_DISCONNECTED_MESSAGE);
                     continue;
                 }
                 Err(_) => {
@@ -1062,32 +1058,24 @@ impl SyncClient {
         pin_mut!(disconnecting);
         loop {
             // Select between the next message and disconnecting
-            let message_result = match future::select(reader.next(), disconnecting).await {
+            let wrapped_message = match future::select(reader.next(), disconnecting).await {
                 Either::Left((Some(message), unresolved_disconnecting)) => {
                     disconnecting = unresolved_disconnecting;
                     message
                 }
                 Either::Left((None, _)) => {
-                    error!("TCP socket was disconnected");
+                    error!("{}", TCP_SOCKET_DISCONNECTED_MESSAGE);
                     break;
                 }
                 Either::Right(((), _)) => break,
             };
 
             // Handle the message if it was valid
-            match message_result {
-                Ok(Ok(message)) => {
-                    Self::handle_server_message(Arc::clone(&wrapped_client.sync), message).await;
-                }
-                Ok(Err(e)) => {
-                    error!("Received invalid server message, err: {}", e);
-                    continue;
-                }
-                Err(e) => {
-                    error!("TCP socket error, err: {}", e);
-                    break;
-                }
-            };
+            if let Some(message) = Self::unwrap_server_message(wrapped_message) {
+                Self::handle_server_message(Arc::clone(&wrapped_client.sync), message).await;
+            } else {
+                continue;
+            }
         }
         // If we make it out of the above loop, we somehow disconnected
         let mut client = wrapped_client.lock().await;
@@ -1255,6 +1243,22 @@ impl SyncClient {
 
     async fn ping_with_writer(writer: &mut WriteHalf<TcpStream>) -> Result<()> {
         Self::write_line(writer, ClientControl::Ping).await
+    }
+
+    fn unwrap_server_message(
+        wrapped_server_message: std::result::Result<Result<ServerMessage>, io::Error>,
+    ) -> Option<ServerMessage> {
+        match wrapped_server_message {
+            Ok(Ok(message)) => Some(message),
+            Ok(Err(e)) => {
+                error!("Received invalid server message, err: {}", e);
+                None
+            }
+            Err(e) => {
+                error!("TCP socket error, err: {}", e);
+                None
+            }
+        }
     }
 
     fn state_transition(&mut self, transition: StateTransition) -> StateTransitionResult {

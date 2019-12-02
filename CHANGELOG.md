@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Perform ping-pong to verify connection
+- Verify a new connection with a ping-pong exchange
 - Allow `Address`to be looked up through DNS
 
 ### Changed
