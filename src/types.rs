@@ -105,8 +105,6 @@ impl Info {
 
     /// If this is set, then the client must perform the TLS/1.2 handshake. Note, this used to be
     /// ssl_required and has been updated along with the protocol from SSL to TLS.
-    ///
-    /// TODO: The client does not currently support TLS
     pub fn tls_required(&self) -> bool {
         self.tls_required
     }

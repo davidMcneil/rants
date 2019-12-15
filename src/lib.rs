@@ -47,6 +47,7 @@
 mod codec;
 #[cfg(test)]
 mod tests;
+mod tls_or_tcp_stream;
 mod types;
 mod util;
 
@@ -56,11 +57,12 @@ use futures::{
     stream::StreamExt,
 };
 use log::{debug, error, info, trace, warn};
+use native_tls::TlsConnector;
 use owning_ref::{OwningRef, OwningRefMut};
 use pin_utils::pin_mut;
 use rand;
 use rand::seq::SliceRandom;
-use std::{collections::HashMap, io::ErrorKind, mem, net::Shutdown, sync::Arc, time::Duration};
+use std::{collections::HashMap, io::ErrorKind, mem, sync::Arc, time::Duration};
 use tokio::{
     io::{self, AsyncWriteExt, ReadHalf, WriteHalf},
     net::TcpStream,
@@ -76,12 +78,14 @@ use uuid::Uuid;
 use crate::{
     codec::Codec,
     error::{Error, Result},
+    tls_or_tcp_stream::TlsOrTcpStream,
     types::{
         ClientControl, ConnectionState, ServerMessage, StableMutexGuard, StateTransition,
         StateTransitionResult,
     },
 };
 
+pub use native_tls;
 pub use tokio::sync::{
     mpsc::Receiver as MpscReceiver, mpsc::Sender as MpscSender, watch::Receiver as WatchReceiver,
 };
@@ -230,6 +234,13 @@ impl Client {
             OwningRefMut::new(StableMutexGuard(self.lock().await))
                 .map_mut(|c| c.delay_generator_mut()),
         )
+    }
+
+    /// Set the [`TlsConnector`](https://docs.rs/native-tls/*/native_tls/struct.TlsConnector.html)
+    /// to use when TLS is required](struct.Info.html#method.tls_required).
+    pub async fn set_tls_connector(&mut self, tls_connector: TlsConnector) -> &mut Self {
+        self.lock().await.set_tls_connector(tls_connector);
+        self
     }
 
     /// Get a list of all currently subscribed subscription IDs
@@ -502,6 +513,7 @@ struct SyncClient {
     err_rx: WatchReceiver<ProtocolError>,
     tcp_connect_timeout: Duration,
     delay_generator: DelayGenerator,
+    tls_connector: Option<TlsConnector>,
     subscriptions: HashMap<Sid, Subscription>,
     request_inbox_mapping: HashMap<Subject, MpscSender<Msg>>,
     request_wildcard_subscription: Option<Sid>,
@@ -540,6 +552,7 @@ impl SyncClient {
                 util::DEFAULT_CONNECT_SERIES_DELAY,
                 util::DEFAULT_COOL_DOWN,
             ),
+            tls_connector: None,
             subscriptions: HashMap::new(),
             request_inbox_mapping: HashMap::new(),
             request_wildcard_subscription: None,
@@ -578,6 +591,11 @@ impl SyncClient {
 
     fn delay_generator_mut(&mut self) -> &mut DelayGenerator {
         &mut self.delay_generator
+    }
+
+    fn set_tls_connector(&mut self, tls_connector: TlsConnector) -> &mut Self {
+        self.tls_connector = Some(tls_connector);
+        self
     }
 
     fn subscriptions(&self) -> impl Iterator<Item = (&Sid, &Subscription)> {
@@ -666,12 +684,12 @@ impl SyncClient {
                 client.tcp_connect_timeout,
                 TcpStream::connect(address.address()),
             );
-            let (reader, mut writer) = match connect.await {
-                Ok(Ok(sink_and_stream)) => {
+            let (reader, writer) = match connect.await {
+                Ok(Ok(stream)) => {
                     // TODO: Currently, we use the generic io split in order to avoid lifetime
                     // complications. However, `TcpStream` does implement a specialized split. It
                     // may be worth switching to the specialized version to avoid overhead.
-                    io::split(sink_and_stream)
+                    io::split(TlsOrTcpStream::new(stream))
                 }
                 Ok(Err(e)) => {
                     error!("Failed to connect to '{}', err: {}", address, e);
@@ -687,11 +705,13 @@ impl SyncClient {
 
             // Wait for the first server message. It should always be an info message.
             let wait_for_info = time::timeout(client.tcp_connect_timeout, reader.next());
-            match wait_for_info.await {
+            let tls_required = match wait_for_info.await {
                 Ok(Some(wrapped_message)) => {
                     if let Some(message) = Self::unwrap_server_message(wrapped_message) {
                         if let ServerMessage::Info(info) = message {
+                            let tls_required = info.tls_required();
                             client.handle_info_message(info);
+                            tls_required
                         } else {
                             error!(
                                 "First message should be {} instead received '{:?}'",
@@ -702,6 +722,7 @@ impl SyncClient {
                             continue;
                         }
                     } else {
+                        // Logging errors is handled by `unwrap_server_message`
                         continue;
                     }
                 }
@@ -713,7 +734,34 @@ impl SyncClient {
                     error!("Timed out waiting for {} message", util::INFO_OP_NAME);
                     continue;
                 }
-            }
+            };
+
+            // Upgrade to a TLS connection if necessary
+            let (mut reader, mut writer) = if tls_required {
+                if let Some(tls_connector) = client.tls_connector.clone() {
+                    // Combine the reader and writer back into a single stream
+                    let stream = reader.into_inner().unsplit(writer);
+                    // Try and upgrade the stream to TLS
+                    let upgraded_stream = match stream
+                        .upgrade(tls_connector.clone(), address.domain())
+                        .await
+                    {
+                        Ok(stream) => stream,
+                        Err(e) => {
+                            error!("Failed to upgrade to TLS connection, err: {}", e);
+                            continue;
+                        }
+                    };
+                    // Split the stream back apart
+                    let (reader, writer) = io::split(upgraded_stream);
+                    (FramedRead::new(reader, Codec::new()), writer)
+                } else {
+                    error!("Server requires TLS but the client did not specify a TLS connector");
+                    continue;
+                }
+            } else {
+                (reader, writer)
+            };
 
             // Send a connect message
             if let Err(e) =
@@ -757,6 +805,7 @@ impl SyncClient {
                             }
                         }
                     } else {
+                        // Logging errors is handled by `unwrap_server_message`
                         continue;
                     }
                 }
@@ -1052,7 +1101,7 @@ impl SyncClient {
 
     async fn server_messages_handler(
         wrapped_client: Client,
-        mut reader: FramedRead<ReadHalf<TcpStream>, Codec>,
+        mut reader: FramedRead<ReadHalf<TlsOrTcpStream>, Codec>,
     ) {
         let disconnecting = Self::disconnecting(Arc::clone(&wrapped_client.sync));
         pin_mut!(disconnecting);
@@ -1074,6 +1123,7 @@ impl SyncClient {
             if let Some(message) = Self::unwrap_server_message(wrapped_message) {
                 Self::handle_server_message(Arc::clone(&wrapped_client.sync), message).await;
             } else {
+                // Logging errors is handled by `unwrap_server_message`
                 continue;
             }
         }
@@ -1095,8 +1145,8 @@ impl SyncClient {
         if let StateTransitionResult::Writer(writer) =
             client.state_transition(StateTransition::ToDisconnected)
         {
-            let tcp = reader.into_inner().unsplit(writer);
-            if let Err(e) = tcp.shutdown(Shutdown::Both) {
+            let mut stream = reader.into_inner().unsplit(writer);
+            if let Err(e) = stream.shutdown().await {
                 if e.kind() != ErrorKind::NotConnected {
                     error!("Failed to shutdown TCP stream, err: {}", e);
                 }
@@ -1205,7 +1255,7 @@ impl SyncClient {
     // https://github.com/rust-lang/rust/issues/53690
     fn type_erased_server_messages_handler(
         wrapped_client: Client,
-        reader: FramedRead<ReadHalf<TcpStream>, Codec>,
+        reader: FramedRead<ReadHalf<TlsOrTcpStream>, Codec>,
     ) -> impl std::future::Future<Output = ()> + Send {
         Self::server_messages_handler(wrapped_client, reader)
     }
@@ -1221,7 +1271,7 @@ impl SyncClient {
     }
 
     async fn write_line(
-        writer: &mut WriteHalf<TcpStream>,
+        writer: &mut WriteHalf<TlsOrTcpStream>,
         control_line: ClientControl<'_>,
     ) -> Result<()> {
         let line = control_line.to_line();
@@ -1229,7 +1279,7 @@ impl SyncClient {
     }
 
     async fn send_connect_with_writer(
-        writer: &mut WriteHalf<TcpStream>,
+        writer: &mut WriteHalf<TlsOrTcpStream>,
         connect: &Connect,
         address: &Address,
     ) -> Result<()> {
@@ -1241,7 +1291,7 @@ impl SyncClient {
         Self::write_line(writer, ClientControl::Connect(&connect)).await
     }
 
-    async fn ping_with_writer(writer: &mut WriteHalf<TcpStream>) -> Result<()> {
+    async fn ping_with_writer(writer: &mut WriteHalf<TlsOrTcpStream>) -> Result<()> {
         Self::write_line(writer, ClientControl::Ping).await
     }
 

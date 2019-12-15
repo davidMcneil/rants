@@ -1,7 +1,7 @@
 use std::fmt;
-use tokio::{io::WriteHalf, net::TcpStream};
+use tokio::io::WriteHalf;
 
-use crate::types::Address;
+use crate::{tls_or_tcp_stream::TlsOrTcpStream, types::Address};
 
 // Internal state representation. Identical to `ClientState` but tracks internal implementation
 // details such as `WriteHalf`.
@@ -12,17 +12,17 @@ use crate::types::Address;
 // now, the writer operates at the tcp layer writing raw bytes while the reader uses a custom
 // codec.
 pub enum ConnectionState {
-    Connected(Address, WriteHalf<TcpStream>),
+    Connected(Address, WriteHalf<TlsOrTcpStream>),
     Connecting(Address),
     Disconnected,
     // If we are coming from a connected state, we have a `WriteHalf` to close
-    Disconnecting(Option<WriteHalf<TcpStream>>),
+    Disconnecting(Option<WriteHalf<TlsOrTcpStream>>),
 }
 
 #[derive(Debug)]
 pub enum StateTransition {
     ToConnecting(Address),
-    ToConnected(WriteHalf<TcpStream>),
+    ToConnected(WriteHalf<TlsOrTcpStream>),
     ToDisconnecting,
     ToDisconnected,
 }
@@ -30,7 +30,7 @@ pub enum StateTransition {
 // Used to return data from a state transition
 pub enum StateTransitionResult {
     None,
-    Writer(WriteHalf<TcpStream>),
+    Writer(WriteHalf<TlsOrTcpStream>),
 }
 
 /// Client states
