@@ -1,3 +1,4 @@
+#[cfg(feature = "tls")]
 use native_tls::{self, TlsConnector};
 use pin_project::{pin_project, project};
 use std::{
@@ -8,6 +9,7 @@ use tokio::{
     io::{self, AsyncRead, AsyncWrite},
     net::TcpStream,
 };
+#[cfg(feature = "tls")]
 use tokio_tls::{TlsConnector as TokioTlsConnector, TlsStream};
 
 /// A simple wrapper type that can either be a raw TCP stream or a TCP stream with TLS enabled.
@@ -15,6 +17,7 @@ use tokio_tls::{TlsConnector as TokioTlsConnector, TlsStream};
 #[derive(Debug)]
 pub enum TlsOrTcpStream {
     TcpStream(#[pin] TcpStream),
+    #[cfg(feature = "tls")]
     TlsStream(#[pin] TlsStream<TcpStream>),
 }
 
@@ -23,6 +26,7 @@ impl TlsOrTcpStream {
         Self::TcpStream(stream)
     }
 
+    #[cfg(feature = "tls")]
     pub async fn upgrade(
         self,
         tls_connector: TlsConnector,
@@ -49,6 +53,7 @@ impl AsyncRead for TlsOrTcpStream {
         #[project]
         match self.project() {
             TlsOrTcpStream::TcpStream(stream) => stream.poll_read(cx, buf),
+            #[cfg(feature = "tls")]
             TlsOrTcpStream::TlsStream(stream) => stream.poll_read(cx, buf),
         }
     }
@@ -60,6 +65,7 @@ impl AsyncWrite for TlsOrTcpStream {
         #[project]
         match self.project() {
             TlsOrTcpStream::TcpStream(stream) => stream.poll_write(cx, buf),
+            #[cfg(feature = "tls")]
             TlsOrTcpStream::TlsStream(stream) => stream.poll_write(cx, buf),
         }
     }
@@ -69,6 +75,7 @@ impl AsyncWrite for TlsOrTcpStream {
         #[project]
         match self.project() {
             TlsOrTcpStream::TcpStream(stream) => stream.poll_flush(cx),
+            #[cfg(feature = "tls")]
             TlsOrTcpStream::TlsStream(stream) => stream.poll_flush(cx),
         }
     }
@@ -78,6 +85,7 @@ impl AsyncWrite for TlsOrTcpStream {
         #[project]
         match self.project() {
             TlsOrTcpStream::TcpStream(stream) => stream.poll_shutdown(cx),
+            #[cfg(feature = "tls")]
             TlsOrTcpStream::TlsStream(stream) => stream.poll_shutdown(cx),
         }
     }

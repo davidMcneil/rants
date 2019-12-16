@@ -1,5 +1,7 @@
 //! `nats` `Error` and `Result`
 
+#[cfg(feature = "tls")]
+use native_tls;
 use std::{fmt, io};
 
 use crate::{types::Sid, util};
@@ -27,6 +29,9 @@ pub enum Error {
     InvalidTerminator(Vec<u8>),
     /// Wrapper for all IO errors
     Io(io::Error),
+    /// Wrapper for all native tls errors
+    #[cfg(feature = "tls")]
+    NativeTls(native_tls::Error),
     /// Occurs when a [`request`](../struct.Client.html#method.request) does not receive a
     /// response
     NoResponse,
@@ -35,6 +40,8 @@ pub enum Error {
     NotConnected,
     /// Occurs when the server did not send enough data
     NotEnoughData,
+    /// Occurs when no TLS connector was specified, but the server requires a TLS connection.
+    TlsDisabled,
     /// Occurs when trying to [`unsubscribe`](../struct.Client.html#method.unsubscribe) with
     /// an unknown [`Sid`](../type.Sid.html)
     UnknownSid(Sid),
@@ -53,6 +60,8 @@ impl fmt::Display for Error {
                 write!(f, "invalid message terminator {:?}", terminator)
             }
             Error::Io(e) => write!(f, "{}", e),
+            #[cfg(feature = "tls")]
+            Error::NativeTls(e) => write!(f, "{}", e),
             Error::NoResponse => write!(f, "no response"),
             Error::NotConnected => write!(f, "not connected"),
             Error::NotEnoughData => write!(f, "not enough data"),
@@ -63,6 +72,7 @@ impl fmt::Display for Error {
                 util::NATS_NETWORK_SCHEME
             ),
             Error::UnknownSid(sid) => write!(f, "unknown sid '{}'", sid),
+            Error::TlsDisabled => write!(f, "no TLS connector specified"),
         }
     }
 }
@@ -72,6 +82,13 @@ impl std::error::Error for Error {}
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
         Error::Io(e)
+    }
+}
+
+#[cfg(feature = "tls")]
+impl From<native_tls::Error> for Error {
+    fn from(e: native_tls::Error) -> Self {
+        Error::NativeTls(e)
     }
 }
 

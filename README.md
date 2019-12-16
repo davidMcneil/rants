@@ -9,6 +9,8 @@ An async [NATS](https://nats.io/) client library for the Rust programming langua
 
 The client aims to be an ergonomic, yet thin, wrapper over the NATS client protocol. The easiest way to learn to use the client is by reading the [NATS client protocol documentation](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html). The main entry point into the library's API is the [`Client`](https://docs.rs/rants/latest/rants/struct.Client.html) struct.
 
+TLS support is powered by the [`native-tls` crate](https://github.com/sfackler/rust-native-tls).
+
 # Example
 
 ```rust

@@ -5,6 +5,8 @@
 //! [NATS client protocol documentation](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html).
 //! The main entry point into the library's API is the [`Client`](struct.Client.html) struct.
 //!
+//! TLS support is powered by the [`native-tls` crate](https://github.com/sfackler/rust-native-tls).
+//!
 //! # Example
 //!  ```rust no_run
 //! use futures::stream::StreamExt;
@@ -54,12 +56,13 @@ mod util;
 use futures::{
     future::{self, Either, FutureExt},
     lock::{Mutex, MutexGuard},
+    pin_mut,
     stream::StreamExt,
 };
 use log::{debug, error, info, trace, warn};
+#[cfg(feature = "tls")]
 use native_tls::TlsConnector;
 use owning_ref::{OwningRef, OwningRefMut};
-use pin_utils::pin_mut;
 use rand;
 use rand::seq::SliceRandom;
 use std::{collections::HashMap, io::ErrorKind, mem, sync::Arc, time::Duration};
@@ -85,6 +88,7 @@ use crate::{
     },
 };
 
+#[cfg(feature = "tls")]
 pub use native_tls;
 pub use tokio::sync::{
     mpsc::Receiver as MpscReceiver, mpsc::Sender as MpscSender, watch::Receiver as WatchReceiver,
@@ -238,6 +242,9 @@ impl Client {
 
     /// Set the [`TlsConnector`](https://docs.rs/native-tls/*/native_tls/struct.TlsConnector.html)
     /// to use when TLS is required](struct.Info.html#method.tls_required).
+    ///
+    /// This method is only available when the `tls` feature is enabled.
+    #[cfg(feature = "tls")]
     pub async fn set_tls_connector(&mut self, tls_connector: TlsConnector) -> &mut Self {
         self.lock().await.set_tls_connector(tls_connector);
         self
@@ -513,6 +520,7 @@ struct SyncClient {
     err_rx: WatchReceiver<ProtocolError>,
     tcp_connect_timeout: Duration,
     delay_generator: DelayGenerator,
+    #[cfg(feature = "tls")]
     tls_connector: Option<TlsConnector>,
     subscriptions: HashMap<Sid, Subscription>,
     request_inbox_mapping: HashMap<Subject, MpscSender<Msg>>,
@@ -552,6 +560,7 @@ impl SyncClient {
                 util::DEFAULT_CONNECT_SERIES_DELAY,
                 util::DEFAULT_COOL_DOWN,
             ),
+            #[cfg(feature = "tls")]
             tls_connector: None,
             subscriptions: HashMap::new(),
             request_inbox_mapping: HashMap::new(),
@@ -593,6 +602,7 @@ impl SyncClient {
         &mut self.delay_generator
     }
 
+    #[cfg(feature = "tls")]
     fn set_tls_connector(&mut self, tls_connector: TlsConnector) -> &mut Self {
         self.tls_connector = Some(tls_connector);
         self
@@ -608,6 +618,25 @@ impl SyncClient {
         } else {
             Err(Error::NotConnected)
         }
+    }
+
+    #[cfg(feature = "tls")]
+    async fn upgrade_to_tls(
+        &mut self,
+        stream: TlsOrTcpStream,
+        domain: &str,
+    ) -> Result<TlsOrTcpStream> {
+        let tls_connector = self.tls_connector.clone().ok_or(Error::TlsDisabled)?;
+        Ok(stream.upgrade(tls_connector.clone(), domain).await?)
+    }
+
+    #[cfg(not(feature = "tls"))]
+    async fn upgrade_to_tls(
+        &mut self,
+        _stream: TlsOrTcpStream,
+        _domain: &str,
+    ) -> Result<TlsOrTcpStream> {
+        Err(Error::TlsDisabled)
     }
 
     #[allow(clippy::cognitive_complexity)]
@@ -738,27 +767,18 @@ impl SyncClient {
 
             // Upgrade to a TLS connection if necessary
             let (mut reader, mut writer) = if tls_required {
-                if let Some(tls_connector) = client.tls_connector.clone() {
-                    // Combine the reader and writer back into a single stream
-                    let stream = reader.into_inner().unsplit(writer);
-                    // Try and upgrade the stream to TLS
-                    let upgraded_stream = match stream
-                        .upgrade(tls_connector.clone(), address.domain())
-                        .await
-                    {
-                        Ok(stream) => stream,
-                        Err(e) => {
-                            error!("Failed to upgrade to TLS connection, err: {}", e);
-                            continue;
-                        }
-                    };
-                    // Split the stream back apart
-                    let (reader, writer) = io::split(upgraded_stream);
-                    (FramedRead::new(reader, Codec::new()), writer)
-                } else {
-                    error!("Server requires TLS but the client did not specify a TLS connector");
-                    continue;
-                }
+                // Combine the reader and writer back into a single stream
+                let stream = reader.into_inner().unsplit(writer);
+                let upgraded_stream = match client.upgrade_to_tls(stream, address.domain()).await {
+                    Ok(stream) => stream,
+                    Err(e) => {
+                        error!("Failed to upgrade to TLS connection, err: {}", e);
+                        continue;
+                    }
+                };
+                // Split the stream back apart
+                let (reader, writer) = io::split(upgraded_stream);
+                (FramedRead::new(reader, Codec::new()), writer)
             } else {
                 (reader, writer)
             };
