@@ -17,6 +17,7 @@
         "serializer",
         "splitn",
         "struct",
+        "toolchain",
         "unsplit",
         "uuid"
     ]
