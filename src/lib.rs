@@ -1212,7 +1212,7 @@ impl SyncClient {
                     }
                 };
                 // Try and send the message to the subscription receiver
-                if let Err(_) = subscription.tx.send(msg).await {
+                if subscription.tx.send(msg).await.is_err() {
                     // If we fail to send, it is because the receiver closed. We no longer
                     // care about this subscription and should unsubscribe
                     let wrapped_client = Arc::clone(&wrapped_client);

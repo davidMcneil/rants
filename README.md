@@ -1,5 +1,6 @@
 # Rants
 
+[![build status](https://img.shields.io/github/workflow/status/davidMcneil/rants/Rust)](https://github.com/davidMcneil/rants/actions)
 [![crates.io](https://img.shields.io/crates/v/rants.svg)](https://crates.io/crates/rants)
 [![docs](https://docs.rs/rants/badge.svg)](https://docs.rs/rants)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)

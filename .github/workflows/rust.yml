@@ -36,10 +36,22 @@ jobs:
           toolchain: stable
           override: true
 
+      - name: Download NATS server
+        uses: wei/wget@v1
+        with:
+          args: https://github.com/nats-io/nats-server/releases/download/v2.1.2/nats-server-v2.1.2-linux-amd64.zip
+
+      - name: Extract NATS server
+        uses: montudor/action-zip@v0.1.0
+        with:
+          args: unzip nats-server-v2.1.2-linux-amd64.zip
+
       - name: Run cargo test
         uses: actions-rs/cargo@v1
         with:
           command: test
+        env:
+          NATS_PATH: ./nats-server-v2.1.2-linux-amd64/nats-server
 
   lints:
     name: Lints
