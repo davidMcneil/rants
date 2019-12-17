@@ -914,15 +914,16 @@ impl SyncClient {
         reply_to: Option<&Subject>,
         payload: &[u8],
     ) -> Result<()> {
-        // Check that payload's length does not exceed the servers max_payload
         let max_payload = self.info().max_payload;
-        if payload.len() > max_payload {
-            return Err(Error::ExceedsMaxPayload {
-                tried: payload.len(),
-                limit: max_payload,
-            });
-        }
         if let ConnectionState::Connected(_, writer) = &mut self.state {
+            // Check that payload's length does not exceed the servers max_payload
+            if payload.len() > max_payload {
+                return Err(Error::ExceedsMaxPayload {
+                    tried: payload.len(),
+                    limit: max_payload,
+                });
+            }
+
             Self::write_line(writer, ClientControl::Pub(subject, reply_to, payload.len())).await?;
             writer.write_all(payload).await?;
             writer
