@@ -15,6 +15,14 @@ async fn echo() {
     let address = "127.0.0.1".parse().unwrap();
     let client = Client::new(vec![address]);
 
+    // Trying to publish before connecting should result in a not connected error
+    let subject = "test".parse().unwrap();
+    assert!(client
+        .publish(&subject, b"test")
+        .await
+        .unwrap_err()
+        .not_connected());
+
     // Configure it to echo messages so we can receive messages we sent
     client.connect_mut().await.echo(true);
 

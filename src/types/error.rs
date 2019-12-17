@@ -47,6 +47,17 @@ pub enum Error {
     UnknownSid(Sid),
 }
 
+impl Error {
+    /// Returns true if the error is a `NotConnected` error
+    pub fn not_connected(&self) -> bool {
+        if let Self::NotConnected = self {
+            true
+        } else {
+            false
+        }
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
