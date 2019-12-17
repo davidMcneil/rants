@@ -65,7 +65,10 @@ use native_tls::TlsConnector;
 use owning_ref::{OwningRef, OwningRefMut};
 use rand;
 use rand::seq::SliceRandom;
-use std::{collections::HashMap, io::ErrorKind, mem, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap, io::ErrorKind, mem, result::Result as StdResult, sync::Arc,
+    time::Duration,
+};
 use tokio::{
     io::{self, AsyncWriteExt, ReadHalf, WriteHalf},
     net::TcpStream,
@@ -73,7 +76,7 @@ use tokio::{
         mpsc, oneshot,
         watch::{self, Sender as WatchSender},
     },
-    time,
+    time::{self, Elapsed},
 };
 use tokio_util::codec::FramedRead;
 use uuid::Uuid;
@@ -732,37 +735,27 @@ impl SyncClient {
 
             let mut reader = FramedRead::new(reader, Codec::new());
 
-            // Wait for the first server message. It should always be an info message.
+            // Wait for the first server message. It should be an info message.
             let wait_for_info = time::timeout(client.tcp_connect_timeout, reader.next());
-            let tls_required = match wait_for_info.await {
-                Ok(Some(wrapped_message)) => {
-                    if let Some(message) = Self::unwrap_server_message(wrapped_message) {
-                        if let ServerMessage::Info(info) = message {
-                            let tls_required = info.tls_required();
-                            client.handle_info_message(info);
-                            tls_required
-                        } else {
-                            error!(
-                                "First message should be {} instead received '{:?}'",
-                                util::INFO_OP_NAME,
-                                message
-                            );
-                            debug_assert!(false);
-                            continue;
-                        }
-                    } else {
-                        // Logging errors is handled by `unwrap_server_message`
-                        continue;
-                    }
-                }
-                Ok(None) => {
-                    error!("{}", TCP_SOCKET_DISCONNECTED_MESSAGE);
+            let tls_required = if let Some(message) =
+                Self::unwrap_server_message_with_timeout(wait_for_info.await, util::INFO_OP_NAME)
+            {
+                if let ServerMessage::Info(info) = message {
+                    let tls_required = info.tls_required();
+                    client.handle_info_message(info);
+                    tls_required
+                } else {
+                    error!(
+                        "First message should be {} instead received '{:?}'",
+                        util::INFO_OP_NAME,
+                        message
+                    );
+                    debug_assert!(false);
                     continue;
                 }
-                Err(_) => {
-                    error!("Timed out waiting for {} message", util::INFO_OP_NAME);
-                    continue;
-                }
+            } else {
+                // Logging errors is handled by `unwrap_server_message_with_timeout`
+                continue;
             };
 
             // Upgrade to a TLS connection if necessary
@@ -791,53 +784,73 @@ impl SyncClient {
                 continue;
             }
 
+            // If we are in verbose mode, wait for the ok server message.
+            if client.connect_mut().is_verbose() {
+                let wait_for_ok = time::timeout(client.tcp_connect_timeout, reader.next());
+                if let Some(message) =
+                    Self::unwrap_server_message_with_timeout(wait_for_ok.await, util::OK_OP_NAME)
+                {
+                    match message {
+                        ServerMessage::Ok => (),
+                        ServerMessage::Err(e) => {
+                            error!(
+                                "Protocol error waiting for {} message, err: {}",
+                                util::OK_OP_NAME,
+                                e
+                            );
+                            continue;
+                        }
+                        message => {
+                            error!(
+                                "Next message should be {} instead received '{:?}'",
+                                util::OK_OP_NAME,
+                                message
+                            );
+                            debug_assert!(false);
+                            continue;
+                        }
+                    }
+                } else {
+                    // Logging errors is handled by `unwrap_server_message_with_timeout`
+                    continue;
+                };
+            }
+
             // Perform a ping-pong to verify the connection was established
             if let Err(e) = Self::ping_with_writer(&mut writer).await {
                 error!("Failed to send ping when verifying connection, err: {}", e);
                 continue;
             }
-            // Wait for the second server message. It should always be a pong message if the
-            // connection was successful.
+
+            // Wait for the next server message. It should be a pong message.
             let wait_for_pong = time::timeout(client.tcp_connect_timeout, reader.next());
-            match wait_for_pong.await {
-                Ok(Some(wrapped_message)) => {
-                    if let Some(message) = Self::unwrap_server_message(wrapped_message) {
-                        match message {
-                            ServerMessage::Pong => (),
-                            ServerMessage::Err(e) => {
-                                error!(
-                                    "Protocol error when verifying connection with ping-pong, err: {}",
-                                    e
-                                );
-                                continue;
-                            }
-                            ServerMessage::Info(_)
-                            | ServerMessage::Msg(_)
-                            | ServerMessage::Ping
-                            | ServerMessage::Ok => {
-                                error!(
-                                    "Second message should be {} instead received '{:?}'",
-                                    util::PONG_OP_NAME,
-                                    message
-                                );
-                                debug_assert!(false);
-                                continue;
-                            }
-                        }
-                    } else {
-                        // Logging errors is handled by `unwrap_server_message`
+            if let Some(message) =
+                Self::unwrap_server_message_with_timeout(wait_for_pong.await, util::PONG_OP_NAME)
+            {
+                match message {
+                    ServerMessage::Pong => (),
+                    ServerMessage::Err(e) => {
+                        error!(
+                            "Protocol error waiting for {} message, err: {}",
+                            util::PONG_OP_NAME,
+                            e
+                        );
+                        continue;
+                    }
+                    message => {
+                        error!(
+                            "Next message should be {} instead received '{:?}'",
+                            util::PONG_OP_NAME,
+                            message
+                        );
+                        debug_assert!(false);
                         continue;
                     }
                 }
-                Ok(None) => {
-                    error!("{}", TCP_SOCKET_DISCONNECTED_MESSAGE);
-                    continue;
-                }
-                Err(_) => {
-                    error!("Timed out waiting for {} message", util::PONG_OP_NAME);
-                    continue;
-                }
-            }
+            } else {
+                // Logging errors is handled by `unwrap_server_message_with_timeout`
+                continue;
+            };
 
             // Resubscribe to subscriptions
             let mut failed_to_resubscribe = Vec::new();
@@ -1317,7 +1330,7 @@ impl SyncClient {
     }
 
     fn unwrap_server_message(
-        wrapped_server_message: std::result::Result<Result<ServerMessage>, io::Error>,
+        wrapped_server_message: StdResult<Result<ServerMessage>, io::Error>,
     ) -> Option<ServerMessage> {
         match wrapped_server_message {
             Ok(Ok(message)) => Some(message),
@@ -1327,6 +1340,29 @@ impl SyncClient {
             }
             Err(e) => {
                 error!("TCP socket error, err: {}", e);
+                None
+            }
+        }
+    }
+
+    fn unwrap_server_message_with_timeout(
+        wrapped_server_message: StdResult<
+            Option<StdResult<Result<ServerMessage>, io::Error>>,
+            Elapsed,
+        >,
+        waiting_for: &str,
+    ) -> Option<ServerMessage> {
+        match wrapped_server_message {
+            Ok(Some(wrapped_message)) => {
+                // Logging errors is handled by `unwrap_server_message`
+                Self::unwrap_server_message(wrapped_message)
+            }
+            Ok(None) => {
+                error!("{}", TCP_SOCKET_DISCONNECTED_MESSAGE);
+                None
+            }
+            Err(_) => {
+                error!("Timed out waiting for {} message", waiting_for);
                 None
             }
         }

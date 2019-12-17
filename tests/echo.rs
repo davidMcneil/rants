@@ -24,7 +24,12 @@ async fn echo() {
         .not_connected());
 
     // Configure it to echo messages so we can receive messages we sent
-    client.connect_mut().await.echo(true);
+    client
+        .connect_mut()
+        .await
+        .verbose(true)
+        .pedantic(true)
+        .echo(true);
 
     // Connect the client
     client.connect().await;
