@@ -16,6 +16,8 @@ Types of changes
 
 ## [Unreleased]
 
+## [0.4.2] - 2019-12-19
+
 ## [0.4.1] - 2019-12-17
 
 ### Added
