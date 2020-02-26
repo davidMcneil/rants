@@ -435,6 +435,12 @@ pub struct Subject {
     full_wildcard: bool,
 }
 
+impl Subject {
+    pub fn new(tokens: Vec<String>, full_wildcard: bool) -> Self {
+        Subject { tokens, full_wildcard }
+    }
+}
+
 impl fmt::Display for Subject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Is the whole subject a full wildcard
