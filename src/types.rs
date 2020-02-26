@@ -437,7 +437,10 @@ pub struct Subject {
 
 impl Subject {
     pub fn new(tokens: Vec<String>, full_wildcard: bool) -> Self {
-        Subject { tokens, full_wildcard }
+        Subject {
+            tokens,
+            full_wildcard,
+        }
     }
 }
 
