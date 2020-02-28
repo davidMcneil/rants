@@ -464,28 +464,28 @@ pub struct SubjectBuilder {
 }
 
 impl SubjectBuilder {
-    fn new() -> Self {
+    pub fn new() -> Self {
         SubjectBuilder {
             tokens: Vec::new()
         }
     }
 
-    fn add(mut self, subject: String) -> Self {
+    pub fn add(mut self, subject: String) -> Self {
         // Need to add some checks here to check for illegal characters
         self.tokens.push(subject);
         self
     }
 
-    fn add_wildcard(mut self) -> Self {
+    pub fn add_wildcard(mut self) -> Self {
         self.tokens.push("*".to_string());
         self
     }
 
-    fn add_full_wildcard(self) -> FullWildcardSubjectBuilder {
+    pub fn add_full_wildcard(self) -> FullWildcardSubjectBuilder {
         FullWildcardSubjectBuilder (self)
     }
 
-    fn build(self) -> Subject {
+    pub fn build(self) -> Subject {
         let fwc = self.tokens.is_empty();
         Subject {
             tokens: self.tokens,
@@ -494,10 +494,10 @@ impl SubjectBuilder {
     }
 }
 
-struct FullWildcardSubjectBuilder (SubjectBuilder);
+pub struct FullWildcardSubjectBuilder (SubjectBuilder);
 
 impl FullWildcardSubjectBuilder {
-    fn build(self) -> Subject {
+    pub fn build(self) -> Subject {
         Subject {
             tokens: self.0.tokens,
             full_wildcard: true
