@@ -420,28 +420,28 @@ impl fmt::Display for ProtocolError {
 
 /// A [subject](https://nats-io.github.io/docs/nats_protocol/nats-protocol.html#protocol-conventions) to publish or subscribe to
 ///
-/// `Subject`s can only be created by parsing a string.
+/// `Subject`s can be created by parsing a String or via a SubjectBuilder
 ///
 /// # Example
 ///  ```
-/// use rants::Subject;
+/// use rants::{ Subject, SubjectBuilder };
 ///
 /// let subject = "foo.bar.*.>".parse::<Subject>();
 /// assert!(subject.is_ok());
+///
+/// let subject = SubjectBuilder::new()
+///   .add("foo")
+///   .add("bar")
+///   .add_wildcard()
+///   .add_full_wildcard()
+///   .build();
+///
+/// assert_eq!(format!("{}", subject), "foo.bar.*.>");
 /// ```
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Subject {
     tokens: Vec<String>,
     full_wildcard: bool,
-}
-
-impl Subject {
-    pub fn new(tokens: Vec<String>, full_wildcard: bool) -> Self {
-        Subject {
-            tokens,
-            full_wildcard,
-        }
-    }
 }
 
 impl fmt::Display for Subject {
@@ -456,6 +456,52 @@ impl fmt::Display for Subject {
             write!(f, ".>")?;
         }
         Ok(())
+    }
+}
+
+pub struct SubjectBuilder {
+    tokens: Vec<String>
+}
+
+impl SubjectBuilder {
+    fn new() -> Self {
+        SubjectBuilder {
+            tokens: Vec::new()
+        }
+    }
+
+    fn add(mut self, subject: String) -> Self {
+        // Need to add some checks here to check for illegal characters
+        self.tokens.push(subject);
+        self
+    }
+
+    fn add_wildcard(mut self) -> Self {
+        self.tokens.push("*".to_string());
+        self
+    }
+
+    fn add_full_wildcard(self) -> FullWildcardSubjectBuilder {
+        FullWildcardSubjectBuilder (self)
+    }
+
+    fn build(self) -> Subject {
+        let fwc = self.tokens.is_empty();
+        Subject {
+            tokens: self.tokens,
+            full_wildcard: fwc
+        }
+    }
+}
+
+struct FullWildcardSubjectBuilder (SubjectBuilder);
+
+impl FullWildcardSubjectBuilder {
+    fn build(self) -> Subject {
+        Subject {
+            tokens: self.0.tokens,
+            full_wildcard: true
+        }
     }
 }
 
