@@ -461,14 +461,14 @@ impl fmt::Display for Subject {
 
 pub struct SubjectBuilder {
     tokens: Vec<String>,
-    full_wildcard: bool
+    full_wildcard: bool,
 }
 
 impl SubjectBuilder {
     pub fn new() -> Self {
         SubjectBuilder {
             tokens: Vec::new(),
-            full_wildcard: false
+            full_wildcard: false,
         }
     }
 
@@ -487,7 +487,7 @@ impl SubjectBuilder {
         let fwc = self.tokens.is_empty() || self.full_wildcard;
         Subject {
             tokens: self.tokens,
-            full_wildcard: fwc
+            full_wildcard: fwc,
         }
     }
 
