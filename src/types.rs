@@ -460,19 +460,21 @@ impl fmt::Display for Subject {
 }
 
 pub struct SubjectBuilder {
-    tokens: Vec<String>
+    tokens: Vec<String>,
+    full_wildcard: bool
 }
 
 impl SubjectBuilder {
     pub fn new() -> Self {
         SubjectBuilder {
-            tokens: Vec::new()
+            tokens: Vec::new(),
+            full_wildcard: false
         }
     }
 
-    pub fn add(mut self, subject: String) -> Self {
+    pub fn add(mut self, subject: impl Into<String>) -> Self {
         // Need to add some checks here to check for illegal characters
-        self.tokens.push(subject);
+        self.tokens.push(subject.into());
         self
     }
 
@@ -481,27 +483,17 @@ impl SubjectBuilder {
         self
     }
 
-    pub fn add_full_wildcard(self) -> FullWildcardSubjectBuilder {
-        FullWildcardSubjectBuilder (self)
-    }
-
     pub fn build(self) -> Subject {
-        let fwc = self.tokens.is_empty();
+        let fwc = self.tokens.is_empty() || self.full_wildcard;
         Subject {
             tokens: self.tokens,
             full_wildcard: fwc
         }
     }
-}
 
-pub struct FullWildcardSubjectBuilder (SubjectBuilder);
-
-impl FullWildcardSubjectBuilder {
-    pub fn build(self) -> Subject {
-        Subject {
-            tokens: self.0.tokens,
-            full_wildcard: true
-        }
+    pub fn set_full_wildcard(mut self) -> Self {
+        self.full_wildcard = true;
+        self
     }
 }
 
