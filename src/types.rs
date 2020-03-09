@@ -433,8 +433,7 @@ impl fmt::Display for ProtocolError {
 ///   .add("foo")
 ///   .add("bar")
 ///   .add_wildcard()
-///   .add_full_wildcard()
-///   .build();
+///   .build_full_wildcard();
 ///
 /// assert_eq!(format!("{}", subject), "foo.bar.*.>");
 /// ```
@@ -460,15 +459,13 @@ impl fmt::Display for Subject {
 }
 
 pub struct SubjectBuilder {
-    tokens: Vec<String>,
-    full_wildcard: bool,
+    tokens: Vec<String>
 }
 
 impl SubjectBuilder {
     pub fn new() -> Self {
         SubjectBuilder {
-            tokens: Vec::new(),
-            full_wildcard: false,
+            tokens: Vec::new()
         }
     }
 
@@ -484,16 +481,18 @@ impl SubjectBuilder {
     }
 
     pub fn build(self) -> Subject {
-        let fwc = self.tokens.is_empty() || self.full_wildcard;
+        let fwc = self.tokens.is_empty();
         Subject {
             tokens: self.tokens,
             full_wildcard: fwc,
         }
     }
 
-    pub fn set_full_wildcard(mut self) -> Self {
-        self.full_wildcard = true;
-        self
+    pub fn build_full_wildcard(self) -> Subject {
+        Subject {
+            tokens: self.tokens,
+            full_wildcard: true,
+        }
     }
 }
 
