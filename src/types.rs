@@ -459,14 +459,12 @@ impl fmt::Display for Subject {
 }
 
 pub struct SubjectBuilder {
-    tokens: Vec<String>
+    tokens: Vec<String>,
 }
 
 impl SubjectBuilder {
     pub fn new() -> Self {
-        SubjectBuilder {
-            tokens: Vec::new()
-        }
+        SubjectBuilder { tokens: Vec::new() }
     }
 
     pub fn add(mut self, subject: impl Into<String>) -> Self {
