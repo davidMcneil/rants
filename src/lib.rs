@@ -99,7 +99,7 @@ pub use tokio::sync::{
 
 pub use crate::types::{
     error, Address, Authorization, ClientRef, ClientRefMut, ClientState, Connect, Info, Msg,
-    ProtocolError, Sid, Subject, Subscription,
+    ProtocolError, Sid, Subject, SubjectBuilder, Subscription,
 };
 
 const TCP_SOCKET_DISCONNECTED_MESSAGE: &str = "TCP socket was disconnected";
