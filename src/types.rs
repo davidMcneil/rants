@@ -261,7 +261,7 @@ impl Connect {
 
     /// Get the optional name of the client.
     pub fn get_name(&self) -> Option<&str> {
-        self.name.as_ref().map(String::as_str)
+        self.name.as_deref()
     }
 
     /// Set the optional client name. [default = `None`]
@@ -458,15 +458,17 @@ impl fmt::Display for Subject {
     }
 }
 
+#[derive(Default)]
 pub struct SubjectBuilder {
     tokens: Vec<String>,
 }
 
 impl SubjectBuilder {
     pub fn new() -> Self {
-        SubjectBuilder { tokens: Vec::new() }
+        Self::default()
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn add(mut self, subject: impl Into<String>) -> Self {
         // Need to add some checks here to check for illegal characters
         self.tokens.push(subject.into());

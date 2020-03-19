@@ -43,7 +43,7 @@ impl NatsServer {
 
         // Spawn a task to handle stdout
         let stdout = child
-            .stdout()
+            .stdout
             .take()
             .expect("child did not have a handle to stdout");
         tokio::spawn(async {
@@ -56,7 +56,7 @@ impl NatsServer {
         // Spawn a task to handle stderr and check if nats is ready
         let (ready_tx, ready_rx) = oneshot::channel::<()>();
         let stderr = child
-            .stderr()
+            .stderr
             .take()
             .expect("child did not have a handle to stdout");
         tokio::spawn(async {

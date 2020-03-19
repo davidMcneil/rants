@@ -12,38 +12,40 @@
 //! use futures::stream::StreamExt;
 //! use rants::Client;
 //!
-//! #[tokio::main]
-//! async fn main() {
-//!     // A NATS server must be running on `127.0.0.1:4222`
-//!     let address = "127.0.0.1:4222".parse().unwrap();
-//!     let client = Client::new(vec![address]);
+//!# #[tokio::main]
+//!# async fn main
+//!# // keep this to quell `needless_doctest_main` warning
+//!# () {
+//! // A NATS server must be running on `127.0.0.1:4222`
+//! let address = "127.0.0.1:4222".parse().unwrap();
+//! let client = Client::new(vec![address]);
 //!
-//!     // Configure the client to receive messages even if it sent the message
-//!     client.connect_mut().await.echo(true);
+//! // Configure the client to receive messages even if it sent the message
+//! client.connect_mut().await.echo(true);
 //!
-//!     // Connect to the server
-//!     client.connect().await;
+//! // Connect to the server
+//! client.connect().await;
 //!
-//!     // Create a new subject called "test"
-//!     let subject = "test".parse().unwrap();
+//! // Create a new subject called "test"
+//! let subject = "test".parse().unwrap();
 //!
-//!     // Subscribe to the "test" subject
-//!     let (_, mut subscription) = client.subscribe(&subject, 1024).await.unwrap();
+//! // Subscribe to the "test" subject
+//! let (_, mut subscription) = client.subscribe(&subject, 1024).await.unwrap();
 //!
-//!     // Publish a message to the "test" subject
-//!     client
-//!         .publish(&subject, b"This is a message!")
-//!         .await
-//!         .unwrap();
+//! // Publish a message to the "test" subject
+//! client
+//!     .publish(&subject, b"This is a message!")
+//!     .await
+//!     .unwrap();
 //!
-//!     // Read a message from the subscription
-//!     let message = subscription.next().await.unwrap();
-//!     let message = String::from_utf8(message.into_payload()).unwrap();
-//!     println!("Received '{}'", message);
+//! // Read a message from the subscription
+//! let message = subscription.next().await.unwrap();
+//! let message = String::from_utf8(message.into_payload()).unwrap();
+//! println!("Received '{}'", message);
 //!
-//!     // Disconnect from the server
-//!     client.disconnect().await;
-//! }
+//! // Disconnect from the server
+//! client.disconnect().await;
+//!# }
 //! ```
 
 mod codec;
@@ -63,7 +65,6 @@ use log::{debug, error, info, trace, warn};
 #[cfg(feature = "tls")]
 use native_tls::TlsConnector;
 use owning_ref::{OwningRef, OwningRefMut};
-use rand;
 use rand::seq::SliceRandom;
 use std::{
     collections::HashMap, io::ErrorKind, mem, result::Result as StdResult, sync::Arc,
