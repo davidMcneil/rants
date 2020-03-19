@@ -49,7 +49,7 @@ async fn main() {
 
    // Disconnect from the server
    client.disconnect().await;
-};
+}
 ```
 
 ## Development
