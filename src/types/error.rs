@@ -1,7 +1,5 @@
 //! `nats` `Error` and `Result`
 
-#[cfg(feature = "tls")]
-use native_tls;
 use std::{fmt, io};
 
 use crate::{types::Sid, util};
