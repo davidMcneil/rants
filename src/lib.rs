@@ -1155,11 +1155,28 @@ impl SyncClient {
             };
 
             // Handle the message if it was valid
-            if let Some(message) = Self::unwrap_server_message(wrapped_message) {
-                Self::handle_server_message(Arc::clone(&wrapped_client.sync), message).await;
-            } else {
-                // Logging errors is handled by `unwrap_server_message`
-                continue;
+            match Disposition::from_output(wrapped_message) {
+                Disposition::Message(m) => {
+                    Self::handle_server_message(Arc::clone(&wrapped_client.sync), m).await;
+                    continue;
+                }
+                Disposition::DecodingError(e) => {
+                    error!("Received invalid server message, err: {}", e);
+                    continue;
+                }
+                Disposition::UnrecoverableError(e) => {
+                    // When the TCP stream drops (e.g., you pull out
+                    // the network cable from the server), we get a
+                    // ConnectionReset error on
+                    // Windows. (Interestingly, we don't get any error
+                    // on Linux.) Ideally, this would be translated
+                    // somehow into a terminating stream.
+                    //
+                    // In this case, we must treat this as a
+                    // disconnection and break out of our loop.
+                    error!("TCP socket error, err: {}", e);
+                    break;
+                }
             }
         }
         // If we make it out of the above loop, we somehow disconnected
@@ -1330,22 +1347,6 @@ impl SyncClient {
         Self::write_line(writer, ClientControl::Ping).await
     }
 
-    fn unwrap_server_message(
-        wrapped_server_message: StdResult<Result<ServerMessage>, io::Error>,
-    ) -> Option<ServerMessage> {
-        match wrapped_server_message {
-            Ok(Ok(message)) => Some(message),
-            Ok(Err(e)) => {
-                error!("Received invalid server message, err: {}", e);
-                None
-            }
-            Err(e) => {
-                error!("TCP socket error, err: {}", e);
-                None
-            }
-        }
-    }
-
     fn unwrap_server_message_with_timeout(
         wrapped_server_message: StdResult<
             Option<StdResult<Result<ServerMessage>, io::Error>>,
@@ -1354,10 +1355,17 @@ impl SyncClient {
         waiting_for: &str,
     ) -> Option<ServerMessage> {
         match wrapped_server_message {
-            Ok(Some(wrapped_message)) => {
-                // Logging errors is handled by `unwrap_server_message`
-                Self::unwrap_server_message(wrapped_message)
-            }
+            Ok(Some(wrapped_message)) => match Disposition::from_output(wrapped_message) {
+                Disposition::Message(m) => Some(m),
+                Disposition::DecodingError(e) => {
+                    error!("Received invalid server message, err: {}", e);
+                    None
+                }
+                Disposition::UnrecoverableError(e) => {
+                    error!("TCP socket error, err: {}", e);
+                    None
+                }
+            },
             Ok(None) => {
                 error!("{}", TCP_SOCKET_DISCONNECTED_MESSAGE);
                 None
@@ -1430,5 +1438,32 @@ impl SyncClient {
             .broadcast(next_client_state)
             .expect("to broadcast state transition");
         result
+    }
+}
+
+/// Convenient type alias for what comes out of our Decoder stream.
+type DecoderStreamOutput = StdResult<Result<ServerMessage>, io::Error>;
+
+/// Translates the various cases of what `DecoderStreamOutput` into
+/// easier-to-understand labels to aid in reasoning and to consolidate
+/// this matching logic into a single place.
+enum Disposition {
+    /// The stream yielded a valid NATS message.
+    Message(ServerMessage),
+    /// The stream encountered a decoding error, but can still be read
+    /// from in the future.
+    DecodingError(Error),
+    /// An error was thrown when trying to decode an item; don't try
+    /// reading from the stream again.
+    UnrecoverableError(io::Error),
+}
+
+impl Disposition {
+    fn from_output(o: DecoderStreamOutput) -> Self {
+        match o {
+            Ok(Ok(m)) => Self::Message(m),
+            Ok(Err(e)) => Self::DecodingError(e),
+            Err(e) => Self::UnrecoverableError(e),
+        }
     }
 }
