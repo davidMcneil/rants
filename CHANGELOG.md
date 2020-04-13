@@ -16,6 +16,14 @@ Types of changes
 
 ## [Unreleased]
 
+## [0.4.3] - 2019-04-13
+
+### Added
+- Subject constructor #18
+
+### Fixed
+- Disconnect on TCP error #24
+
 ## [0.4.2] - 2019-12-19
 
 ## [0.4.1] - 2019-12-17

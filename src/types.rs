@@ -464,10 +464,12 @@ pub struct SubjectBuilder {
 }
 
 impl SubjectBuilder {
+    /// Create a new `SubjectBuilder`
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Add a component to the subject
     #[allow(clippy::should_implement_trait)]
     pub fn add(mut self, subject: impl Into<String>) -> Self {
         // Need to add some checks here to check for illegal characters
@@ -475,11 +477,13 @@ impl SubjectBuilder {
         self
     }
 
+    /// Add a wildcard to the subject
     pub fn add_wildcard(mut self) -> Self {
         self.tokens.push("*".to_string());
         self
     }
 
+    /// Generate the subject
     pub fn build(self) -> Subject {
         let fwc = self.tokens.is_empty();
         Subject {
@@ -488,6 +492,7 @@ impl SubjectBuilder {
         }
     }
 
+    /// Generate the subject with a full wildcard ending
     pub fn build_full_wildcard(self) -> Subject {
         Subject {
             tokens: self.tokens,
