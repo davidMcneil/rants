@@ -63,6 +63,7 @@ The [`env_logger`](https://github.com/sebasmagri/env_logger/) crate is used in i
     > RUST_LOG=rants=trace cargo test ping_pong
 
 ## Alternatives
+- [`nats.rs`](https://github.com/nats-io/nats.rs)
 - [`natsclient`](https://github.com/encabulators/natsclient)
 - [`nitox`](https://github.com/YellowInnovation/nitox)
 - [`ratsio`](https://github.com/mnetship/ratsio)
