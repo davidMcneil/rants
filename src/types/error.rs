@@ -4,6 +4,8 @@ use std::{fmt, io};
 
 use crate::{types::Sid, util};
 
+use tokio::time;
+
 /// All potential `rants` errors
 #[derive(Debug)]
 pub enum Error {
@@ -38,6 +40,9 @@ pub enum Error {
     NotConnected,
     /// Occurs when the server did not send enough data
     NotEnoughData,
+    /// A timeout that has elapsed. For example: when a request does not a receive a response
+    /// before the provided timeout duration has expired.
+    Timeout(time::Elapsed),
     /// Occurs when no TLS connector was specified, but the server requires a TLS connection.
     TlsDisabled,
     /// Occurs when trying to [`unsubscribe`](../struct.Client.html#method.unsubscribe) with
@@ -81,12 +86,19 @@ impl fmt::Display for Error {
                 util::NATS_NETWORK_SCHEME
             ),
             Error::UnknownSid(sid) => write!(f, "unknown sid '{}'", sid),
+            Error::Timeout(e) => write!(f, "{}", e),
             Error::TlsDisabled => write!(f, "no TLS connector specified"),
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+impl From<tokio::time::Elapsed> for Error {
+    fn from(e: tokio::time::Elapsed) -> Self {
+        Error::Timeout(e)
+    }
+}
 
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {

@@ -980,6 +980,21 @@ impl SyncClient {
         subject: &Subject,
         payload: &[u8],
     ) -> Result<Msg> {
+        Self::request_with_timeout(
+            wrapped_client,
+            subject,
+            payload,
+            Duration::from_secs(std::u64::MAX),
+        )
+        .await
+    }
+
+    async fn request_with_timeout(
+        wrapped_client: Arc<Mutex<Self>>,
+        subject: &Subject,
+        payload: &[u8],
+        duration: Duration,
+    ) -> Result<Msg> {
         let inbox_uuid = Uuid::new_v4();
 
         let (mut rx, reply_to) = {
@@ -1016,7 +1031,7 @@ impl SyncClient {
         // Make sure we clean up on error (don't leave a dangling request
         // inbox mapping reference. Adding an extra mutex here seems fine
         // since this is the error path.
-        match rx.next().await {
+        match tokio::time::timeout(duration, rx.next()).await? {
             Some(response) => Ok(response),
             None => {
                 let mut client = wrapped_client.lock().await;
