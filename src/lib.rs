@@ -364,7 +364,23 @@ impl Client {
     /// immediately unsubscribed from.
     /// See [here](https://github.com/nats-io/nats.go/issues/294) for an improved implementation.
     pub async fn request(&self, subject: &Subject, payload: &[u8]) -> Result<Msg> {
-        SyncClient::request(Arc::clone(&self.sync), subject, payload).await
+        self.request_with_timeout(
+            subject,
+            payload,
+            // NOTE: We use nanos and divide u64::MAX / 1000 so we don't overflow the timeout.
+            // When converted into days this is ~213 days. Good enough to basically wait forever.
+            Duration::from_nanos(std::u64::MAX / 1000),
+        )
+        .await
+    }
+
+    pub async fn request_with_timeout(
+        &self,
+        subject: &Subject,
+        payload: &[u8],
+        duration: Duration,
+    ) -> Result<Msg> {
+        SyncClient::request_with_timeout(Arc::clone(&self.sync), subject, payload, duration).await
     }
 
     /// Convenience wrapper around [`subscribe_with_optional_queue_group`](struct.Client.html#method.subscribe_with_optional_queue_group)
@@ -973,20 +989,6 @@ impl SyncClient {
         let mut client = wrapped_client.lock().await;
         client.request_inbox_mapping.clear();
         client.request_wildcard_subscription = None;
-    }
-
-    async fn request(
-        wrapped_client: Arc<Mutex<Self>>,
-        subject: &Subject,
-        payload: &[u8],
-    ) -> Result<Msg> {
-        Self::request_with_timeout(
-            wrapped_client,
-            subject,
-            payload,
-            Duration::from_secs(std::u64::MAX),
-        )
-        .await
     }
 
     async fn request_with_timeout(
