@@ -364,14 +364,7 @@ impl Client {
     /// immediately unsubscribed from.
     /// See [here](https://github.com/nats-io/nats.go/issues/294) for an improved implementation.
     pub async fn request(&self, subject: &Subject, payload: &[u8]) -> Result<Msg> {
-        self.request_with_timeout(
-            subject,
-            payload,
-            // NOTE: We use nanos and divide u64::MAX / 1000 so we don't overflow the timeout.
-            // When converted into days this is ~213 days. Good enough to basically wait forever.
-            Duration::from_nanos(std::u64::MAX / 1000),
-        )
-        .await
+        SyncClient::request_with_timeout(Arc::clone(&self.sync), subject, payload, None).await
     }
 
     pub async fn request_with_timeout(
@@ -380,7 +373,8 @@ impl Client {
         payload: &[u8],
         duration: Duration,
     ) -> Result<Msg> {
-        SyncClient::request_with_timeout(Arc::clone(&self.sync), subject, payload, duration).await
+        SyncClient::request_with_timeout(Arc::clone(&self.sync), subject, payload, Some(duration))
+            .await
     }
 
     /// Convenience wrapper around [`subscribe_with_optional_queue_group`](struct.Client.html#method.subscribe_with_optional_queue_group)
@@ -995,7 +989,7 @@ impl SyncClient {
         wrapped_client: Arc<Mutex<Self>>,
         subject: &Subject,
         payload: &[u8],
-        duration: Duration,
+        duration: Option<Duration>,
     ) -> Result<Msg> {
         let inbox_uuid = Uuid::new_v4();
 
@@ -1030,10 +1024,16 @@ impl SyncClient {
             (rx, reply_to)
         };
 
+        // Use a timeout duration if it was provided by the caller.
+        let next_message = match duration {
+            Some(duration) => tokio::time::timeout(duration, rx.next()).await?,
+            None => rx.next().await,
+        };
+
         // Make sure we clean up on error (don't leave a dangling request
         // inbox mapping reference. Adding an extra mutex here seems fine
         // since this is the error path.
-        match tokio::time::timeout(duration, rx.next()).await? {
+        match next_message {
             Some(response) => Ok(response),
             None => {
                 let mut client = wrapped_client.lock().await;
