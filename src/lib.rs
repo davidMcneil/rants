@@ -1438,6 +1438,7 @@ impl Disposition {
 struct Request {
     reply_to: Subject,
     wrapped_client: Arc<Mutex<SyncClient>>,
+    request_inbox_mapping_was_removed: bool,
 }
 
 impl Request {
@@ -1457,6 +1458,7 @@ impl Request {
         Ok(Self {
             reply_to,
             wrapped_client: wrapped_client.clone(),
+            request_inbox_mapping_was_removed: false,
         })
     }
 
@@ -1503,7 +1505,11 @@ impl Request {
         // Make sure we clean up on error (don't leave a dangling request
         // inbox mapping reference).
         match next_message {
-            Some(response) => Ok(response),
+            Some(response) => {
+                // This happens automatically when a response is received.
+                self.request_inbox_mapping_was_removed = true;
+                Ok(response)
+            },
             None => Err(Error::NoResponse),
         }
     }
@@ -1516,6 +1522,10 @@ impl Drop for Request {
     // is the client's mutex, which should be fine.
     // When/if async drop becomes available we should use that instead.
     fn drop(&mut self) {
+        if self.request_inbox_mapping_was_removed {
+            return;
+        }
+
         futures::executor::block_on(async {
             let mut client = self.wrapped_client.lock().await;
 
