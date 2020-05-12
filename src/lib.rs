@@ -1521,8 +1521,7 @@ impl Drop for Request {
 
             client
                 .request_inbox_mapping
-                .remove(&self.reply_to)
-                .or_else(|| None);
+                .remove(&self.reply_to);
         });
     }
 }
