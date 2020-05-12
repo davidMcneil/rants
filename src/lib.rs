@@ -1509,7 +1509,7 @@ impl Request {
                 // This happens automatically when a response is received.
                 self.request_inbox_mapping_was_removed = true;
                 Ok(response)
-            },
+            }
             None => Err(Error::NoResponse),
         }
     }
@@ -1529,9 +1529,7 @@ impl Drop for Request {
         futures::executor::block_on(async {
             let mut client = self.wrapped_client.lock().await;
 
-            client
-                .request_inbox_mapping
-                .remove(&self.reply_to);
+            client.request_inbox_mapping.remove(&self.reply_to);
         });
     }
 }
