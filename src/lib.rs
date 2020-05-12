@@ -1501,8 +1501,7 @@ impl Request {
         };
 
         // Make sure we clean up on error (don't leave a dangling request
-        // inbox mapping reference. Adding an extra mutex here seems fine
-        // since this is the error path.
+        // inbox mapping reference).
         match next_message {
             Some(response) => Ok(response),
             None => Err(Error::NoResponse),
@@ -1515,6 +1514,7 @@ impl Drop for Request {
     // from the client request inbox mapping.
     // NOTE: This is a blocking async block, but the only thing it blocks on
     // is the client's mutex, which should be fine.
+    // When/if async drop becomes available we should use that instead.
     fn drop(&mut self) {
         futures::executor::block_on(async {
             let mut client = self.wrapped_client.lock().await;
