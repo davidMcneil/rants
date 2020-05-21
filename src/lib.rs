@@ -991,7 +991,7 @@ impl SyncClient {
         payload: &[u8],
         duration: Option<Duration>,
     ) -> Result<Msg> {
-        let mut request = Request::new(wrapped_client).await?;
+        let request = Request::new(wrapped_client).await?;
         request.call(subject, payload, duration).await
     }
 
@@ -1462,8 +1462,10 @@ impl Request {
         })
     }
 
+    // Call takes the ownership of the request to prevent double-requesting with
+    // the same request inbox.
     async fn call(
-        &mut self,
+        mut self,
         subject: &Subject,
         payload: &[u8],
         duration: Option<Duration>,
