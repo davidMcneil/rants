@@ -364,7 +364,17 @@ impl Client {
     /// immediately unsubscribed from.
     /// See [here](https://github.com/nats-io/nats.go/issues/294) for an improved implementation.
     pub async fn request(&self, subject: &Subject, payload: &[u8]) -> Result<Msg> {
-        SyncClient::request(Arc::clone(&self.sync), subject, payload).await
+        SyncClient::request_with_timeout(Arc::clone(&self.sync), subject, payload, None).await
+    }
+
+    pub async fn request_with_timeout(
+        &self,
+        subject: &Subject,
+        payload: &[u8],
+        duration: Duration,
+    ) -> Result<Msg> {
+        SyncClient::request_with_timeout(Arc::clone(&self.sync), subject, payload, Some(duration))
+            .await
     }
 
     /// Convenience wrapper around [`subscribe_with_optional_queue_group`](struct.Client.html#method.subscribe_with_optional_queue_group)
@@ -975,58 +985,14 @@ impl SyncClient {
         client.request_wildcard_subscription = None;
     }
 
-    async fn request(
+    async fn request_with_timeout(
         wrapped_client: Arc<Mutex<Self>>,
         subject: &Subject,
         payload: &[u8],
+        duration: Option<Duration>,
     ) -> Result<Msg> {
-        let inbox_uuid = Uuid::new_v4();
-
-        let (mut rx, reply_to) = {
-            let mut client = wrapped_client.lock().await;
-            let request_inbox = inbox_uuid.to_simple();
-            let reply_to: Subject = format!(
-                "{}.{}.{}",
-                util::INBOX_PREFIX,
-                client.request_base_inbox,
-                request_inbox
-            )
-            .parse()?;
-
-            // Only subscribe to the wildcard subscription when requested once!
-            if client.request_wildcard_subscription.is_none() {
-                let reply_to =
-                    format!("{}.{}.*", util::INBOX_PREFIX, client.request_base_inbox).parse()?;
-                let (sid, rx) = client.subscribe(&reply_to, 1024).await?;
-                client.request_wildcard_subscription = Some(sid);
-
-                // Spawn the task that watches the request wildcard receiver.
-                tokio::spawn(Self::request_wildcard_handler(wrapped_client.clone(), rx));
-            }
-
-            let (tx, rx) = mpsc::channel(1);
-            client.request_inbox_mapping.insert(reply_to.clone(), tx);
-            client
-                .publish_with_reply(subject, &reply_to, payload)
-                .await?;
-
-            (rx, reply_to)
-        };
-
-        // Make sure we clean up on error (don't leave a dangling request
-        // inbox mapping reference. Adding an extra mutex here seems fine
-        // since this is the error path.
-        match rx.next().await {
-            Some(response) => Ok(response),
-            None => {
-                let mut client = wrapped_client.lock().await;
-                client
-                    .request_inbox_mapping
-                    .remove(&reply_to)
-                    .or_else(|| None);
-                Err(Error::NoResponse)
-            }
-        }
+        let request = Request::new(wrapped_client).await?;
+        request.call(subject, payload, duration).await
     }
 
     async fn subscribe(
@@ -1465,5 +1431,107 @@ impl Disposition {
             Ok(Err(e)) => Self::DecodingError(e),
             Err(e) => Self::UnrecoverableError(e),
         }
+    }
+}
+
+// Request helper type for NATS request
+struct Request {
+    reply_to: Subject,
+    wrapped_client: Arc<Mutex<SyncClient>>,
+    request_inbox_mapping_was_removed: bool,
+}
+
+impl Request {
+    async fn new(wrapped_client: Arc<Mutex<SyncClient>>) -> Result<Self> {
+        let inbox_uuid = Uuid::new_v4();
+
+        let client = wrapped_client.lock().await;
+        let request_inbox = inbox_uuid.to_simple();
+        let reply_to: Subject = format!(
+            "{}.{}.{}",
+            util::INBOX_PREFIX,
+            client.request_base_inbox,
+            request_inbox
+        )
+        .parse()?;
+
+        Ok(Self {
+            reply_to,
+            wrapped_client: wrapped_client.clone(),
+            request_inbox_mapping_was_removed: false,
+        })
+    }
+
+    // Call takes the ownership of the request to prevent double-requesting with
+    // the same request inbox.
+    async fn call(
+        mut self,
+        subject: &Subject,
+        payload: &[u8],
+        duration: Option<Duration>,
+    ) -> Result<Msg> {
+        let mut rx = {
+            let mut client = self.wrapped_client.lock().await;
+
+            // Only subscribe to the wildcard subscription when requested once!
+            if client.request_wildcard_subscription.is_none() {
+                let global_reply_to =
+                    format!("{}.{}.*", util::INBOX_PREFIX, client.request_base_inbox).parse()?;
+                let (sid, rx) = client.subscribe(&global_reply_to, 1024).await?;
+                client.request_wildcard_subscription = Some(sid);
+
+                // Spawn the task that watches the request wildcard receiver.
+                tokio::spawn(SyncClient::request_wildcard_handler(
+                    self.wrapped_client.clone(),
+                    rx,
+                ));
+            }
+
+            let (tx, rx) = mpsc::channel(1);
+            client
+                .request_inbox_mapping
+                .insert(self.reply_to.clone(), tx);
+            client
+                .publish_with_reply(subject, &self.reply_to, payload)
+                .await?;
+
+            rx
+        };
+
+        // Use a timeout duration if it was provided by the caller.
+        let next_message = match duration {
+            Some(duration) => tokio::time::timeout(duration, rx.next()).await?,
+            None => rx.next().await,
+        };
+
+        // Make sure we clean up on error (don't leave a dangling request
+        // inbox mapping reference).
+        match next_message {
+            Some(response) => {
+                // This happens automatically when a response is received.
+                self.request_inbox_mapping_was_removed = true;
+                Ok(response)
+            }
+            None => Err(Error::NoResponse),
+        }
+    }
+}
+
+impl Drop for Request {
+    // When the request is dropped, ensure the reply_to subject is removed
+    // from the client request inbox mapping.
+    // NOTE: This is a blocking async block, but the only thing it blocks on
+    // is the client's mutex, which should be fine.
+    // When/if async drop becomes available we should use that instead.
+    fn drop(&mut self) {
+        if self.request_inbox_mapping_was_removed {
+            return;
+        }
+
+        futures::executor::block_on(async {
+            let mut client = self.wrapped_client.lock().await;
+
+            client.request_inbox_mapping.remove(&self.reply_to);
+        });
     }
 }

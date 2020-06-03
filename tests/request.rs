@@ -2,7 +2,7 @@ mod common;
 
 use common::NatsServer;
 use futures::stream::StreamExt;
-use rants::{Client, Subject};
+use rants::{error::Error, Client, Subject};
 
 async fn make_subscription(client: Client, subject: &Subject) {
     let mut subscription = client.subscribe(subject, 1).await.unwrap().1;
@@ -48,6 +48,37 @@ async fn request() {
     let reply = client.request(&subject2, b"the request").await.unwrap();
     let reply = String::from_utf8(reply.into_payload()).unwrap();
     assert_eq!(&reply, "the reply");
+
+    // Make a third request (via timeout interface to show it's wired correctly)
+    let subject3 = "test_subject3".parse::<Subject>().unwrap();
+    make_subscription(Client::clone(&client), &subject3).await;
+    let reply = client
+        .request_with_timeout(
+            &subject3,
+            b"the request",
+            std::time::Duration::from_millis(1000),
+        )
+        .await
+        .unwrap();
+    let reply = String::from_utf8(reply.into_payload()).unwrap();
+    assert_eq!(&reply, "the reply");
+
+    // Make a fourth request (that will timeout)
+    let subject4 = "test_subject4".parse::<Subject>().unwrap();
+    let err = client
+        .request_with_timeout(
+            &subject4,
+            b"the request",
+            std::time::Duration::from_millis(10),
+        )
+        .await
+        .unwrap_err();
+
+    // Ensure we get a timeout error. Fail otherwise.
+    match err {
+        Error::Timeout(_) => {}
+        _ => assert!(false),
+    };
 
     client.disconnect().await;
 }
