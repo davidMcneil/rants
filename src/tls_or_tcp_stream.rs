@@ -1,6 +1,6 @@
 #[cfg(feature = "tls")]
 use native_tls::{self, TlsConnector};
-use pin_project::{pin_project, project};
+use pin_project::pin_project;
 use std::{
     pin::Pin,
     task::{Context, Poll},
@@ -13,7 +13,7 @@ use tokio::{
 use tokio_tls::{TlsConnector as TokioTlsConnector, TlsStream};
 
 /// A simple wrapper type that can either be a raw TCP stream or a TCP stream with TLS enabled.
-#[pin_project]
+#[pin_project(project = TlsOrTcpStreamProj)]
 #[derive(Debug)]
 pub enum TlsOrTcpStream {
     TcpStream(#[pin] TcpStream),
@@ -44,49 +44,41 @@ impl TlsOrTcpStream {
 }
 
 impl AsyncRead for TlsOrTcpStream {
-    #[project]
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        #[project]
         match self.project() {
-            TlsOrTcpStream::TcpStream(stream) => stream.poll_read(cx, buf),
+            TlsOrTcpStreamProj::TcpStream(stream) => stream.poll_read(cx, buf),
             #[cfg(feature = "tls")]
-            TlsOrTcpStream::TlsStream(stream) => stream.poll_read(cx, buf),
+            TlsOrTcpStreamProj::TlsStream(stream) => stream.poll_read(cx, buf),
         }
     }
 }
 
 impl AsyncWrite for TlsOrTcpStream {
-    #[project]
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
-        #[project]
         match self.project() {
-            TlsOrTcpStream::TcpStream(stream) => stream.poll_write(cx, buf),
+            TlsOrTcpStreamProj::TcpStream(stream) => stream.poll_write(cx, buf),
             #[cfg(feature = "tls")]
-            TlsOrTcpStream::TlsStream(stream) => stream.poll_write(cx, buf),
+            TlsOrTcpStreamProj::TlsStream(stream) => stream.poll_write(cx, buf),
         }
     }
 
-    #[project]
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        #[project]
         match self.project() {
-            TlsOrTcpStream::TcpStream(stream) => stream.poll_flush(cx),
+            TlsOrTcpStreamProj::TcpStream(stream) => stream.poll_flush(cx),
             #[cfg(feature = "tls")]
-            TlsOrTcpStream::TlsStream(stream) => stream.poll_flush(cx),
+            TlsOrTcpStreamProj::TlsStream(stream) => stream.poll_flush(cx),
         }
     }
 
-    #[project]
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        #[project]
         match self.project() {
-            TlsOrTcpStream::TcpStream(stream) => stream.poll_shutdown(cx),
+            TlsOrTcpStreamProj::TcpStream(stream) => stream.poll_shutdown(cx),
             #[cfg(feature = "tls")]
-            TlsOrTcpStream::TlsStream(stream) => stream.poll_shutdown(cx),
+            TlsOrTcpStreamProj::TlsStream(stream) => stream.poll_shutdown(cx),
         }
     }
 }
