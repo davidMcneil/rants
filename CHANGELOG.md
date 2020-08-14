@@ -16,6 +16,11 @@ Types of changes
 
 ## [Unreleased]
 
+## [0.4.4] - 2020-08-14
+
+### Added
+- The `Client::request_with_timeout` method #25
+
 ## [0.4.3] - 2019-04-13
 
 ### Added

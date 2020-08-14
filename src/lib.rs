@@ -359,14 +359,11 @@ impl Client {
     }
 
     /// Implements the [request-reply pattern](https://nats-io.github.io/docs/developer/concepts/reqreply.html)
-    ///
-    /// **Note:** This uses the old method of request reply. It creates a temporary subscription that is
-    /// immediately unsubscribed from.
-    /// See [here](https://github.com/nats-io/nats.go/issues/294) for an improved implementation.
     pub async fn request(&self, subject: &Subject, payload: &[u8]) -> Result<Msg> {
         SyncClient::request_with_timeout(Arc::clone(&self.sync), subject, payload, None).await
     }
 
+    /// Implements the [request-reply pattern](https://nats-io.github.io/docs/developer/concepts/reqreply.html) with a timeout
     pub async fn request_with_timeout(
         &self,
         subject: &Subject,
