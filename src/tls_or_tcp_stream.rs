@@ -1,5 +1,5 @@
-#[cfg(feature = "tls")]
-use native_tls::{self, TlsConnector};
+#[cfg(feature = "native-tls")]
+use native_tls_crate::{self, TlsConnector};
 use pin_project::pin_project;
 use std::{
     pin::Pin,
@@ -9,15 +9,15 @@ use tokio::{
     io::{self, AsyncRead, AsyncWrite},
     net::TcpStream,
 };
-#[cfg(feature = "tls")]
-use tokio_tls::{TlsConnector as TokioTlsConnector, TlsStream};
+#[cfg(feature = "native-tls")]
+use tokio_native_tls::{TlsConnector as TokioTlsConnector, TlsStream};
 
 /// A simple wrapper type that can either be a raw TCP stream or a TCP stream with TLS enabled.
 #[pin_project(project = TlsOrTcpStreamProj)]
 #[derive(Debug)]
 pub enum TlsOrTcpStream {
     TcpStream(#[pin] TcpStream),
-    #[cfg(feature = "tls")]
+    #[cfg(feature = "native-tls")]
     TlsStream(#[pin] TlsStream<TcpStream>),
 }
 
@@ -26,12 +26,12 @@ impl TlsOrTcpStream {
         Self::TcpStream(stream)
     }
 
-    #[cfg(feature = "tls")]
+    #[cfg(feature = "native-tls")]
     pub async fn upgrade(
         self,
         tls_connector: TlsConnector,
         domain: &str,
-    ) -> Result<Self, native_tls::Error> {
+    ) -> Result<Self, native_tls_crate::Error> {
         Ok(match self {
             Self::TcpStream(stream) => {
                 let tokio_tls_connector = TokioTlsConnector::from(tls_connector);
@@ -51,7 +51,7 @@ impl AsyncRead for TlsOrTcpStream {
     ) -> Poll<io::Result<usize>> {
         match self.project() {
             TlsOrTcpStreamProj::TcpStream(stream) => stream.poll_read(cx, buf),
-            #[cfg(feature = "tls")]
+            #[cfg(feature = "native-tls")]
             TlsOrTcpStreamProj::TlsStream(stream) => stream.poll_read(cx, buf),
         }
     }
@@ -61,7 +61,7 @@ impl AsyncWrite for TlsOrTcpStream {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
         match self.project() {
             TlsOrTcpStreamProj::TcpStream(stream) => stream.poll_write(cx, buf),
-            #[cfg(feature = "tls")]
+            #[cfg(feature = "native-tls")]
             TlsOrTcpStreamProj::TlsStream(stream) => stream.poll_write(cx, buf),
         }
     }
@@ -69,7 +69,7 @@ impl AsyncWrite for TlsOrTcpStream {
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
         match self.project() {
             TlsOrTcpStreamProj::TcpStream(stream) => stream.poll_flush(cx),
-            #[cfg(feature = "tls")]
+            #[cfg(feature = "native-tls")]
             TlsOrTcpStreamProj::TlsStream(stream) => stream.poll_flush(cx),
         }
     }
@@ -77,7 +77,7 @@ impl AsyncWrite for TlsOrTcpStream {
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
         match self.project() {
             TlsOrTcpStreamProj::TcpStream(stream) => stream.poll_shutdown(cx),
-            #[cfg(feature = "tls")]
+            #[cfg(feature = "native-tls")]
             TlsOrTcpStreamProj::TlsStream(stream) => stream.poll_shutdown(cx),
         }
     }

@@ -62,8 +62,8 @@ use futures::{
     stream::StreamExt,
 };
 use log::{debug, error, info, trace, warn};
-#[cfg(feature = "tls")]
-use native_tls::TlsConnector;
+#[cfg(feature = "native-tls")]
+use native_tls_crate::TlsConnector;
 use owning_ref::{OwningRef, OwningRefMut};
 use rand::seq::SliceRandom;
 use std::{
@@ -92,8 +92,8 @@ use crate::{
     },
 };
 
-#[cfg(feature = "tls")]
-pub use native_tls;
+#[cfg(feature = "native-tls")]
+pub use native_tls_crate as native_tls;
 pub use tokio::sync::{
     mpsc::Receiver as MpscReceiver, mpsc::Sender as MpscSender, watch::Receiver as WatchReceiver,
 };
@@ -247,8 +247,8 @@ impl Client {
     /// Set the [`TlsConnector`](https://docs.rs/native-tls/*/native_tls/struct.TlsConnector.html)
     /// to use when TLS is required](struct.Info.html#method.tls_required).
     ///
-    /// This method is only available when the `tls` feature is enabled.
-    #[cfg(feature = "tls")]
+    /// This method is only available when the `native-tls` feature is enabled.
+    #[cfg(feature = "native-tls")]
     pub async fn set_tls_connector(&mut self, tls_connector: TlsConnector) -> &mut Self {
         self.lock().await.set_tls_connector(tls_connector);
         self
@@ -531,7 +531,7 @@ struct SyncClient {
     err_rx: WatchReceiver<ProtocolError>,
     tcp_connect_timeout: Duration,
     delay_generator: DelayGenerator,
-    #[cfg(feature = "tls")]
+    #[cfg(feature = "native-tls")]
     tls_connector: Option<TlsConnector>,
     subscriptions: HashMap<Sid, Subscription>,
     request_inbox_mapping: HashMap<Subject, MpscSender<Msg>>,
@@ -571,7 +571,7 @@ impl SyncClient {
                 util::DEFAULT_CONNECT_SERIES_DELAY,
                 util::DEFAULT_COOL_DOWN,
             ),
-            #[cfg(feature = "tls")]
+            #[cfg(feature = "native-tls")]
             tls_connector: None,
             subscriptions: HashMap::new(),
             request_inbox_mapping: HashMap::new(),
@@ -613,7 +613,7 @@ impl SyncClient {
         &mut self.delay_generator
     }
 
-    #[cfg(feature = "tls")]
+    #[cfg(feature = "native-tls")]
     fn set_tls_connector(&mut self, tls_connector: TlsConnector) -> &mut Self {
         self.tls_connector = Some(tls_connector);
         self
@@ -631,7 +631,7 @@ impl SyncClient {
         }
     }
 
-    #[cfg(feature = "tls")]
+    #[cfg(feature = "native-tls")]
     async fn upgrade_to_tls(
         &mut self,
         stream: TlsOrTcpStream,
@@ -641,7 +641,7 @@ impl SyncClient {
         Ok(stream.upgrade(tls_connector.clone(), domain).await?)
     }
 
-    #[cfg(not(feature = "tls"))]
+    #[cfg(not(feature = "native-tls"))]
     async fn upgrade_to_tls(
         &mut self,
         _stream: TlsOrTcpStream,

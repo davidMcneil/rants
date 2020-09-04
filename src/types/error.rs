@@ -30,8 +30,8 @@ pub enum Error {
     /// Wrapper for all IO errors
     Io(io::Error),
     /// Wrapper for all native tls errors
-    #[cfg(feature = "tls")]
-    NativeTls(native_tls::Error),
+    #[cfg(feature = "native-tls")]
+    NativeTls(native_tls_crate::Error),
     /// Occurs when a [`request`](../struct.Client.html#method.request) does not receive a
     /// response
     NoResponse,
@@ -74,7 +74,7 @@ impl fmt::Display for Error {
                 write!(f, "invalid message terminator {:?}", terminator)
             }
             Error::Io(e) => write!(f, "{}", e),
-            #[cfg(feature = "tls")]
+            #[cfg(feature = "native-tls")]
             Error::NativeTls(e) => write!(f, "{}", e),
             Error::NoResponse => write!(f, "no response"),
             Error::NotConnected => write!(f, "not connected"),
@@ -106,9 +106,9 @@ impl From<io::Error> for Error {
     }
 }
 
-#[cfg(feature = "tls")]
-impl From<native_tls::Error> for Error {
-    fn from(e: native_tls::Error) -> Self {
+#[cfg(feature = "native-tls")]
+impl From<native_tls_crate::Error> for Error {
+    fn from(e: native_tls_crate::Error) -> Self {
         Error::NativeTls(e)
     }
 }
