@@ -56,14 +56,16 @@ jobs:
       - name: Run cargo test with `native-tls` feature
         uses: actions-rs/cargo@v1
         with:
-          command: test --features native-tls
+          command: test
+          args: --features native-tls
         env:
           NATS_PATH: ./nats-server-v2.1.2-linux-amd64/nats-server
 
       - name: Run cargo test with `rustls-tls` feature
         uses: actions-rs/cargo@v1
         with:
-          command: test --features rustls-tls
+          command: test
+          args: --features rustls-tls
         env:
           NATS_PATH: ./nats-server-v2.1.2-linux-amd64/nats-server
 

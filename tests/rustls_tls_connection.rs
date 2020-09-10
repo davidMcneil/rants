@@ -4,10 +4,7 @@ mod common;
 #[cfg(feature = "rustls-tls")]
 mod test {
     use super::common::{self, NatsServer};
-    use rants::{
-        rustls::ClientConfig,
-        Client,
-    };
+    use rants::{rustls::ClientConfig, Client};
     use std::{fs::File, io::BufReader};
 
     #[tokio::test(threaded_scheduler)]
