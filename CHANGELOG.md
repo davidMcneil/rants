@@ -16,6 +16,16 @@ Types of changes
 
 ## [Unreleased]
 
+## [0.5.0] - 2020-09-10
+
+### Added
+- Add the `rustls-tls` TLS backend
+- Add the `Client::set_tls_domain` method
+
+### Changed
+- The `tls` feature is not on by default. There are now two potential TLS backends `native-tls` or `rustls-tls`.
+- Rename `Client::set_tls_connector` to `Client::set_tls_config`
+
 ## [0.4.4] - 2020-08-14
 
 ### Added
