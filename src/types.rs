@@ -5,6 +5,8 @@ mod refs;
 mod state;
 #[cfg(test)]
 mod tests;
+#[cfg(feature = "tls")]
+pub mod tls;
 
 use log::trace;
 use serde::{Deserialize, Serialize};

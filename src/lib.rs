@@ -55,6 +55,8 @@ mod tls_or_tcp_stream;
 mod types;
 mod util;
 
+#[cfg(feature = "tls")]
+use crate::types::tls::TlsConfig;
 use futures::{
     future::{self, Either, FutureExt},
     lock::{Mutex, MutexGuard},
@@ -62,8 +64,6 @@ use futures::{
     stream::StreamExt,
 };
 use log::{debug, error, info, trace, warn};
-#[cfg(feature = "native-tls")]
-use native_tls_crate::TlsConnector;
 use owning_ref::{OwningRef, OwningRefMut};
 use rand::seq::SliceRandom;
 use std::{
@@ -94,6 +94,8 @@ use crate::{
 
 #[cfg(feature = "native-tls")]
 pub use native_tls_crate as native_tls;
+#[cfg(feature = "rustls-tls")]
+pub use rustls;
 pub use tokio::sync::{
     mpsc::Receiver as MpscReceiver, mpsc::Sender as MpscSender, watch::Receiver as WatchReceiver,
 };
@@ -244,13 +246,28 @@ impl Client {
         )
     }
 
-    /// Set the [`TlsConnector`](https://docs.rs/native-tls/*/native_tls/struct.TlsConnector.html)
-    /// to use when TLS is required](struct.Info.html#method.tls_required).
+    /// Set the `TlsConfig` to use when TLS is [required](struct.Info.html#method.tls_required).
     ///
-    /// This method is only available when the `native-tls` feature is enabled.
-    #[cfg(feature = "native-tls")]
-    pub async fn set_tls_connector(&mut self, tls_connector: TlsConnector) -> &mut Self {
-        self.lock().await.set_tls_connector(tls_connector);
+    /// This method is only available when the `native-tls` or `rustls-tls` feature is enabled.
+    /// When `native-tls` is enabled `tls_config` is of type
+    // [`native_tls::TlsConnector`](https://docs.rs/native-tls/*/native_tls/struct.TlsConnector.html).
+    /// When `rustls-tls` is enabled `tls_config` is of type
+    /// [`rustls::ClientConfig`](https://docs.rs/rustls/*/rustls/struct.ClientConfig.html).
+    #[cfg(feature = "tls")]
+    pub async fn set_tls_config(&mut self, tls_config: TlsConfig) -> &mut Self {
+        self.lock().await.set_tls_config(tls_config);
+        self
+    }
+
+    /// Specify the domain to be used for both Server Name Indication (SNI) and certificate
+    /// hostname validation. If this option is not explicitly set the client will use the hostname
+    /// of the address it is currently connecting to.
+    ///
+    /// When `rustls-tls` is enabled `tls_domain` will try to be parsed as a
+    /// [`webpki::DNSNameRef`](https://docs.rs/webpki/*/webpki/struct.DNSNameRef.html).
+    #[cfg(feature = "tls")]
+    pub async fn set_tls_domain(&mut self, tls_domain: String) -> &mut Self {
+        self.lock().await.set_tls_domain(tls_domain);
         self
     }
 
@@ -531,8 +548,10 @@ struct SyncClient {
     err_rx: WatchReceiver<ProtocolError>,
     tcp_connect_timeout: Duration,
     delay_generator: DelayGenerator,
-    #[cfg(feature = "native-tls")]
-    tls_connector: Option<TlsConnector>,
+    #[cfg(feature = "tls")]
+    tls_config: Option<TlsConfig>,
+    #[cfg(feature = "tls")]
+    tls_domain: Option<String>,
     subscriptions: HashMap<Sid, Subscription>,
     request_inbox_mapping: HashMap<Subject, MpscSender<Msg>>,
     request_wildcard_subscription: Option<Sid>,
@@ -571,8 +590,10 @@ impl SyncClient {
                 util::DEFAULT_CONNECT_SERIES_DELAY,
                 util::DEFAULT_COOL_DOWN,
             ),
-            #[cfg(feature = "native-tls")]
-            tls_connector: None,
+            #[cfg(feature = "tls")]
+            tls_config: None,
+            #[cfg(feature = "tls")]
+            tls_domain: None,
             subscriptions: HashMap::new(),
             request_inbox_mapping: HashMap::new(),
             request_wildcard_subscription: None,
@@ -613,9 +634,15 @@ impl SyncClient {
         &mut self.delay_generator
     }
 
-    #[cfg(feature = "native-tls")]
-    fn set_tls_connector(&mut self, tls_connector: TlsConnector) -> &mut Self {
-        self.tls_connector = Some(tls_connector);
+    #[cfg(feature = "tls")]
+    fn set_tls_config(&mut self, tls_config: TlsConfig) -> &mut Self {
+        self.tls_config = Some(tls_config);
+        self
+    }
+
+    #[cfg(feature = "tls")]
+    fn set_tls_domain(&mut self, domain: String) -> &mut Self {
+        self.tls_domain = Some(domain);
         self
     }
 
@@ -631,17 +658,22 @@ impl SyncClient {
         }
     }
 
-    #[cfg(feature = "native-tls")]
+    #[cfg(feature = "tls")]
     async fn upgrade_to_tls(
         &mut self,
         stream: TlsOrTcpStream,
         domain: &str,
     ) -> Result<TlsOrTcpStream> {
-        let tls_connector = self.tls_connector.clone().ok_or(Error::TlsDisabled)?;
-        Ok(stream.upgrade(tls_connector.clone(), domain).await?)
+        let domain = self.tls_domain.as_deref().unwrap_or(domain).to_string();
+        info!(
+            "Using '{}' as the domain to upgrade to a TLS connection",
+            domain
+        );
+        let tls_config = self.tls_config.clone().ok_or(Error::TlsDisabled)?;
+        Ok(stream.upgrade(tls_config, &domain).await?)
     }
 
-    #[cfg(not(feature = "native-tls"))]
+    #[cfg(not(feature = "tls"))]
     async fn upgrade_to_tls(
         &mut self,
         _stream: TlsOrTcpStream,

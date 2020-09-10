@@ -2,6 +2,8 @@
 
 use std::{fmt, io};
 
+#[cfg(feature = "tls")]
+use crate::types::tls::TlsError;
 use crate::{types::Sid, util};
 
 use tokio::time;
@@ -18,6 +20,9 @@ pub enum Error {
     },
     /// Occurs when trying to parse an invalid [`Address`](../struct.Address.html)
     InvalidAddress(String),
+    /// Occurs when input is not a valid DNS name
+    #[cfg(feature = "rustls-tls")]
+    InvalidDnsName(String),
     /// Occurs when trying to parse an [`Address`](../struct.Address.html) with an invalid network
     /// scheme
     InvalidNetworkScheme(String),
@@ -29,9 +34,9 @@ pub enum Error {
     InvalidTerminator(Vec<u8>),
     /// Wrapper for all IO errors
     Io(io::Error),
-    /// Wrapper for all native tls errors
-    #[cfg(feature = "native-tls")]
-    NativeTls(native_tls_crate::Error),
+    /// Wrapper for all tls errors
+    #[cfg(feature = "tls")]
+    Tls(TlsError),
     /// Occurs when a [`request`](../struct.Client.html#method.request) does not receive a
     /// response
     NoResponse,
@@ -68,14 +73,16 @@ impl fmt::Display for Error {
                 write!(f, "'{}' exceeds max payload '{}'", tried, limit)
             }
             Error::InvalidAddress(address) => write!(f, "invalid address {:?}", address),
+            #[cfg(feature = "rustls-tls")]
+            Error::InvalidDnsName(input) => write!(f, "invalid DNS name '{}'", input),
             Error::InvalidServerControl(line) => write!(f, "invalid control line {:?}", line),
             Error::InvalidSubject(subject) => write!(f, "invalid subject {:?}", subject),
             Error::InvalidTerminator(terminator) => {
                 write!(f, "invalid message terminator {:?}", terminator)
             }
             Error::Io(e) => write!(f, "{}", e),
-            #[cfg(feature = "native-tls")]
-            Error::NativeTls(e) => write!(f, "{}", e),
+            #[cfg(feature = "tls")]
+            Error::Tls(e) => write!(f, "{}", e),
             Error::NoResponse => write!(f, "no response"),
             Error::NotConnected => write!(f, "not connected"),
             Error::NotEnoughData => write!(f, "not enough data"),
@@ -106,10 +113,10 @@ impl From<io::Error> for Error {
     }
 }
 
-#[cfg(feature = "native-tls")]
-impl From<native_tls_crate::Error> for Error {
-    fn from(e: native_tls_crate::Error) -> Self {
-        Error::NativeTls(e)
+#[cfg(feature = "tls")]
+impl From<TlsError> for Error {
+    fn from(e: TlsError) -> Self {
+        Error::Tls(e)
     }
 }
 

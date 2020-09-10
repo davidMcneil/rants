@@ -1,17 +1,17 @@
-#[cfg(feature = "native-tls")]
+#[cfg(feature = "rustls-tls")]
 mod common;
 
-#[cfg(feature = "native-tls")]
+#[cfg(feature = "rustls-tls")]
 mod test {
     use super::common::{self, NatsServer};
     use rants::{
-        native_tls::{Certificate, TlsConnector},
+        rustls::ClientConfig,
         Client,
     };
-    use std::{fs::File, io::Read};
+    use std::{fs::File, io::BufReader};
 
     #[tokio::test(threaded_scheduler)]
-    async fn native_tls_connection() {
+    async fn rustls_tls_connection() {
         common::init();
         let _nats_server = NatsServer::new(&[
             "--tlscert=tests/certs/server-crt.pem",
@@ -23,17 +23,14 @@ mod test {
         let mut client = Client::new(vec![address]);
 
         // Load the server root certificate
-        let mut file = File::open("tests/certs/ca.pem").unwrap();
-        let mut certificate = vec![];
-        file.read_to_end(&mut certificate).unwrap();
-        let certificate = Certificate::from_pem(&certificate).unwrap();
+        let file = File::open("tests/certs/ca.pem").unwrap();
+        let mut file = BufReader::new(file);
 
-        // Set the TLS connector
-        let tls_config = TlsConnector::builder()
-            .add_root_certificate(certificate)
-            .build()
-            .unwrap();
+        // Set the TLS config
+        let mut tls_config = ClientConfig::new();
+        tls_config.root_store.add_pem_file(&mut file).unwrap();
         client.set_tls_config(tls_config).await;
+        client.set_tls_domain(String::from("example.com")).await;
 
         client.connect().await;
         client.disconnect().await;
