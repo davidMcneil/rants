@@ -3,7 +3,7 @@ mod common;
 use common::NatsServer;
 use rants::Client;
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(flavor = "multi_thread")]
 async fn authorization_override() {
     common::init();
     let _nats_server = NatsServer::new(&["--user=test", "--pass=not_secure="]).await;

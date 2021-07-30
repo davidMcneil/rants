@@ -1,10 +1,9 @@
 mod common;
 
 use common::NatsServer;
-use futures::stream::StreamExt;
 use rants::Client;
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(flavor = "multi_thread")]
 async fn reconnect() {
     common::init();
     let _nats_server = NatsServer::new(&[]).await;
@@ -19,13 +18,12 @@ async fn reconnect() {
 
     // Subscribe to the subject
     let (_, mut subscription) = client.subscribe(&subject, 4).await.unwrap();
-
     // Publish messages to the subject
     client.publish(&subject, &[1]).await.unwrap();
     client.publish(&subject, &[2]).await.unwrap();
 
-    assert_eq!(subscription.next().await.unwrap().into_payload(), &[1]);
-    assert_eq!(subscription.next().await.unwrap().into_payload(), &[2]);
+    assert_eq!(subscription.recv().await.unwrap().into_payload(), &[1]);
+    assert_eq!(subscription.recv().await.unwrap().into_payload(), &[2]);
 
     // Disconnect
     client.disconnect().await;
@@ -40,11 +38,11 @@ async fn reconnect() {
     client.publish(&subject, &[4]).await.unwrap();
     client.publish(&subject, &[5]).await.unwrap();
 
-    assert_eq!(subscription.next().await.unwrap().payload(), &[4]);
-    assert_eq!(subscription.next().await.unwrap().payload(), &[5]);
+    assert_eq!(subscription.recv().await.unwrap().payload(), &[4]);
+    assert_eq!(subscription.recv().await.unwrap().payload(), &[5]);
 
     client.disconnect().await;
     std::mem::drop(client);
 
-    assert!(subscription.next().await.is_none());
+    assert!(subscription.recv().await.is_none());
 }

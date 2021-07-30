@@ -20,6 +20,7 @@ pub enum ConnectionState {
 }
 
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum StateTransition {
     ToConnecting(Address),
     ToConnected(WriteHalf<TlsOrTcpStream>),

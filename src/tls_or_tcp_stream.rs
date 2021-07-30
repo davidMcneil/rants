@@ -9,7 +9,7 @@ use std::{
     task::{Context, Poll},
 };
 use tokio::{
-    io::{self, AsyncRead, AsyncWrite},
+    io::{self, AsyncRead, AsyncWrite, ReadBuf},
     net::TcpStream,
 };
 
@@ -43,8 +43,8 @@ impl AsyncRead for TlsOrTcpStream {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut ReadBuf,
+    ) -> Poll<io::Result<()>> {
         match self.project() {
             TlsOrTcpStreamProj::TcpStream(stream) => stream.poll_read(cx, buf),
             #[cfg(feature = "tls")]

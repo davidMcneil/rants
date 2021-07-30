@@ -8,7 +8,7 @@ use nom::{
     bytes::complete::{is_not, tag, tag_no_case, take_until},
     character::complete::{digit1, space1},
     combinator::{all_consuming, cut, map_res, opt},
-    multi::separated_nonempty_list,
+    multi::separated_list1,
     sequence::delimited,
     IResult,
 };
@@ -91,8 +91,7 @@ fn full_wildcard_subject(input: &str) -> IResult<&str, Subject> {
 }
 
 fn not_full_wildcard_subject(input: &str) -> IResult<&str, Subject> {
-    let (input, tokens) =
-        separated_nonempty_list(tag(util::SUBJECT_TOKEN_DELIMITER), token)(input)?;
+    let (input, tokens) = separated_list1(tag(util::SUBJECT_TOKEN_DELIMITER), token)(input)?;
     let (input, full_wildcard) = opt(trailing_full_wildcard)(input)?;
     let tokens = tokens.iter().map(|s| String::from(*s)).collect();
     let subject = Subject {

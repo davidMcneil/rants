@@ -10,7 +10,7 @@ mod test {
     };
     use std::{fs::File, io::Read};
 
-    #[tokio::test(threaded_scheduler)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn native_tls_connection() {
         common::init();
         let _nats_server = NatsServer::new(&[

@@ -47,7 +47,7 @@ pub enum Error {
     NotEnoughData,
     /// A timeout that has elapsed. For example: when a request does not a receive a response
     /// before the provided timeout duration has expired.
-    Timeout(time::Elapsed),
+    Timeout(time::error::Elapsed),
     /// Occurs when no TLS connector was specified, but the server requires a TLS connection.
     TlsDisabled,
     /// Occurs when trying to [`unsubscribe`](../struct.Client.html#method.unsubscribe) with
@@ -58,11 +58,7 @@ pub enum Error {
 impl Error {
     /// Returns true if the error is a `NotConnected` error
     pub fn not_connected(&self) -> bool {
-        if let Self::NotConnected = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, Self::NotConnected)
     }
 }
 
@@ -101,8 +97,8 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-impl From<tokio::time::Elapsed> for Error {
-    fn from(e: tokio::time::Elapsed) -> Self {
+impl From<tokio::time::error::Elapsed> for Error {
+    fn from(e: tokio::time::error::Elapsed) -> Self {
         Error::Timeout(e)
     }
 }
