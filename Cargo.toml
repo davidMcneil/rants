@@ -1,6 +1,6 @@
 [package]
 name = "rants"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["David McNeil <mcneil.david2@gmail.com>"]
 description = "An async NATS client library."
 repository = "https://github.com/davidMcneil/rants"
@@ -14,30 +14,30 @@ exclude = ["rust-toolchain", ".vscode"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bytes = "*"
-futures = "*"
-log = "*"
-nom = "*"
-owning_ref = "*"
-pin-project = "*"
-rand = "*"
-serde = { version = "*", features = ["derive"] }
-serde_json = "*"
-tokio = { version = "*", features = ["io-util", "macros", "sync", "time", "net"] }
-tokio-util = { version = "*", features = ["codec"] }
-tokio-stream = { version = "*", features = ["sync"] }
-uuid = { version = "*", features = ["v4"] }
+bytes = "1.1"
+futures = "0.3"
+log = "0.4"
+nom = "7.1"
+owning_ref = "0.4"
+pin-project = "1.0"
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.13", features = ["io-util", "macros", "sync", "time", "net"] }
+tokio-util = { version = "0.6", features = ["codec"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+uuid = { version = "0.8", features = ["v4"] }
 
 # Optional dependencies
-native-tls-crate = { version = "*", optional = true, package = "native-tls" }
-rustls = { version = "*", optional = true }
-tokio-native-tls = { version = "*", optional = true }
-tokio-rustls = { version = "*", optional = true }
+native-tls-crate = { version = "0.2", optional = true, package = "native-tls" }
+rustls = { version = "0.20", optional = true }
+tokio-native-tls = { version = "0.3", optional = true }
+tokio-rustls = { version = "0.23", optional = true }
 
 [dev-dependencies]
-env_logger = "*"
-hostname = "*"
-tokio = { version = "*", features = ["process", "rt-multi-thread"] }
+env_logger = "0.9"
+hostname = "0.3"
+tokio = { version = "1.13", features = ["process", "rt-multi-thread"] }
 
 [features]
 default = []
