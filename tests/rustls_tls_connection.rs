@@ -4,7 +4,10 @@ mod common;
 #[cfg(feature = "rustls-tls")]
 mod test {
     use super::common::{self, NatsServer};
-    use rants::{rustls::ClientConfig, Client};
+    use rants::{
+        rustls::{Certificate, ClientConfig, RootCertStore},
+        Client,
+    };
     use std::{fs::File, io::BufReader};
 
     #[tokio::test(flavor = "multi_thread")]
@@ -24,8 +27,15 @@ mod test {
         let mut file = BufReader::new(file);
 
         // Set the TLS config
-        let mut tls_config = ClientConfig::new();
-        tls_config.root_store.add_pem_file(&mut file).unwrap();
+        let certs = rustls_pemfile::certs(&mut file).unwrap();
+        let mut root_certs = RootCertStore::empty();
+        for cert in certs {
+            root_certs.add(&Certificate(cert)).unwrap();
+        }
+        let tls_config = ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(root_certs)
+            .with_no_client_auth();
         client.set_tls_config(tls_config).await;
         client.set_tls_domain(String::from("example.com")).await;
 

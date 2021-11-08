@@ -4,14 +4,14 @@ use crate::error::Result;
 #[cfg(feature = "native-tls")]
 pub use native_tls_crate::{Error as TlsError, TlsConnector as TlsConfig};
 #[cfg(feature = "rustls-tls")]
-pub use rustls::{ClientConfig as TlsConfig, TLSError as TlsError};
+pub use rustls::{ClientConfig as TlsConfig, Error as TlsError, ServerName};
 #[cfg(feature = "rustls-tls")]
-use std::sync::Arc;
+use std::{convert::TryFrom, sync::Arc};
 use tokio::net::TcpStream;
 #[cfg(feature = "native-tls")]
 pub use tokio_native_tls::{TlsConnector, TlsStream};
 #[cfg(feature = "rustls-tls")]
-pub use tokio_rustls::{client::TlsStream, webpki::DNSNameRef, TlsConnector};
+pub use tokio_rustls::{client::TlsStream, TlsConnector};
 
 pub async fn tls_stream(
     tls_config: TlsConfig,
@@ -23,8 +23,7 @@ pub async fn tls_stream(
     #[cfg(feature = "rustls-tls")]
     let (tls_connector, domain) = (
         TlsConnector::from(Arc::new(tls_config)),
-        DNSNameRef::try_from_ascii_str(domain)
-            .map_err(|_| Error::InvalidDnsName(String::from(domain)))?,
+        ServerName::try_from(domain).map_err(|_| Error::InvalidDnsName(String::from(domain)))?,
     );
     Ok(tls_connector.connect(domain, stream).await?)
 }
