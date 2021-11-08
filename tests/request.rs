@@ -1,7 +1,6 @@
 mod common;
 
 use common::NatsServer;
-use futures::stream::StreamExt;
 use rants::{error::Error, Client, Subject};
 
 async fn make_subscription(client: Client, subject: &Subject) {
@@ -9,7 +8,7 @@ async fn make_subscription(client: Client, subject: &Subject) {
     let client_copy = Client::clone(&client);
     tokio::spawn(async move {
         // Wait for the request
-        let request = subscription.next().await.unwrap();
+        let request = subscription.recv().await.unwrap();
         let reply_to = request.reply_to().unwrap().clone();
         let request = String::from_utf8(request.into_payload()).unwrap();
         assert_eq!(&request, "the request");
@@ -19,7 +18,7 @@ async fn make_subscription(client: Client, subject: &Subject) {
     });
 }
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(flavor = "multi_thread")]
 async fn request() {
     common::init();
     let _nats_server = NatsServer::new(&["--auth=abc123"]).await;

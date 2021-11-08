@@ -3,8 +3,9 @@ mod common;
 use common::NatsServer;
 use futures::{future, stream::StreamExt};
 use rants::Client;
+use tokio_stream::wrappers::ReceiverStream;
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(flavor = "multi_thread")]
 async fn echo() {
     common::init();
     let _nats_server = NatsServer::new(&[]).await;
@@ -40,6 +41,7 @@ async fn echo() {
         .subscribe(&subject, number_of_messages)
         .await
         .unwrap();
+    let subscription = ReceiverStream::new(subscription);
 
     // Publish messages to "test" subscription
     let mut publishers = Vec::new();

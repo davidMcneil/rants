@@ -14,29 +14,30 @@ exclude = ["rust-toolchain", ".vscode"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bytes = "0.5.1"
-futures = "0.3.1"
-log = "0.4.8"
-nom = "5.0.1"
-owning_ref = "0.4.0"
-pin-project = "0.4.17"
-rand = "0.7.2"
-serde = { version = "1.0.101", features = ["derive"] }
-serde_json = "1.0.40"
-tokio = { version = "0.2.1", features = ["dns", "io-util", "macros", "stream", "sync", "rt-core", "time", "tcp"] }
-tokio-util = { version = "0.2.0", features = ["codec"] }
-uuid = { version = "0.7.4", features = ["v4"] }
+bytes = "*"
+futures = "*"
+log = "*"
+nom = "*"
+owning_ref = "*"
+pin-project = "*"
+rand = "*"
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
+tokio = { version = "*", features = ["io-util", "macros", "sync", "time", "net"] }
+tokio-util = { version = "*", features = ["codec"] }
+tokio-stream = { version = "*", features = ["sync"] }
+uuid = { version = "*", features = ["v4"] }
 
 # Optional dependencies
-native-tls-crate = { version = "0.2.3", optional = true, package = "native-tls" }
-rustls = { version = "0.18.1", optional = true }
-tokio-native-tls = { version = "0.1.0", optional = true }
-tokio-rustls = { version = "0.14.1", optional = true }
+native-tls-crate = { version = "*", optional = true, package = "native-tls" }
+rustls = { version = "*", optional = true }
+tokio-native-tls = { version = "*", optional = true }
+tokio-rustls = { version = "*", optional = true }
 
 [dev-dependencies]
-env_logger = "0.6.2"
-hostname = "0.2.0"
-tokio = { version = "0.2.1", features = ["process"] }
+env_logger = "*"
+hostname = "*"
+tokio = { version = "*", features = ["process", "rt-multi-thread"] }
 
 [features]
 default = []

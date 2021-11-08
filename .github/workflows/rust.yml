@@ -1,4 +1,8 @@
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - master
+  pull_request:
 
 name: Rust
 
@@ -50,6 +54,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
+          args: -- --nocapture
         env:
           NATS_PATH: ./nats-server-v2.1.2-linux-amd64/nats-server
 
@@ -57,7 +62,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --features native-tls
+          args: --features native-tls -- --nocapture
         env:
           NATS_PATH: ./nats-server-v2.1.2-linux-amd64/nats-server
 
@@ -65,7 +70,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --features rustls-tls
+          args: --features rustls-tls -- --nocapture
         env:
           NATS_PATH: ./nats-server-v2.1.2-linux-amd64/nats-server
 

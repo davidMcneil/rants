@@ -7,7 +7,7 @@ mod test {
     use rants::{rustls::ClientConfig, Client};
     use std::{fs::File, io::BufReader};
 
-    #[tokio::test(threaded_scheduler)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn rustls_tls_connection() {
         common::init();
         let _nats_server = NatsServer::new(&[

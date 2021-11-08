@@ -39,7 +39,7 @@
 //!     .unwrap();
 //!
 //! // Read a message from the subscription
-//! let message = subscription.next().await.unwrap();
+//! let message = subscription.recv().await.unwrap();
 //! let message = String::from_utf8(message.into_payload()).unwrap();
 //! println!("Received '{}'", message);
 //!
@@ -77,8 +77,9 @@ use tokio::{
         mpsc, oneshot,
         watch::{self, Sender as WatchSender},
     },
-    time::{self, Elapsed},
+    time::{self, error::Elapsed},
 };
+use tokio_stream::wrappers::WatchStream;
 use tokio_util::codec::FramedRead;
 use uuid::Uuid;
 
@@ -721,10 +722,9 @@ impl SyncClient {
                     connect_attempts,
                     addresses_len
                 );
-                time::delay_for(delay).await;
+                time::sleep(delay).await;
             }
             connect_attempts += 1;
-
             let mut client = wrapped_client.lock().await;
 
             match client.state {
@@ -910,7 +910,7 @@ impl SyncClient {
             // Remove all subscriptions that failed to resubscribe
             client
                 .subscriptions
-                .retain(|sid, _| !failed_to_resubscribe.contains(&sid));
+                .retain(|sid, _| !failed_to_resubscribe.contains(sid));
 
             // Spawn the task to handle reading subsequent server messages
             tokio::spawn(Self::type_erased_server_messages_handler(
@@ -933,7 +933,8 @@ impl SyncClient {
                 return;
             }
 
-            let mut state_stream = client.state_stream();
+            let state_stream = client.state_stream();
+            let mut state_stream = WatchStream::new(state_stream);
             // Spawn a future waiting for the disconnected state
             tokio::spawn(async move {
                 while let Some(state) = state_stream.next().await {
@@ -992,9 +993,9 @@ impl SyncClient {
         wrapped_client: Arc<Mutex<Self>>,
         mut subscription_rx: MpscReceiver<Msg>,
     ) {
-        while let Some(msg) = subscription_rx.next().await {
+        while let Some(msg) = subscription_rx.recv().await {
             let mut client = wrapped_client.lock().await;
-            if let Some(mut requester_tx) = client.request_inbox_mapping.remove(&msg.subject()) {
+            if let Some(requester_tx) = client.request_inbox_mapping.remove(msg.subject()) {
                 requester_tx.send(msg).await.unwrap_or_else(|err| {
                     warn!("Could not write response to pending request via mapping channel. Skipping! Err: {}", err);
                     debug_assert!(false);
@@ -1119,7 +1120,8 @@ impl SyncClient {
     async fn ping_pong(wrapped_client: Arc<Mutex<Self>>) -> Result<()> {
         let mut pong_stream = {
             let mut client = wrapped_client.lock().await;
-            let mut pong_stream = client.pong_stream();
+            let pong_stream = client.pong_stream();
+            let mut pong_stream = WatchStream::new(pong_stream);
             // Clear the current value
             pong_stream.next().now_or_never();
             client.ping().await?;
@@ -1133,7 +1135,8 @@ impl SyncClient {
         wrapped_client: Client,
         mut reader: FramedRead<ReadHalf<TlsOrTcpStream>, Codec>,
     ) {
-        let disconnecting = Self::disconnecting(Arc::clone(&wrapped_client.sync));
+        let disconnecting =
+            Self::disconnecting(WatchStream::new(wrapped_client.lock().await.state_stream()));
         pin_mut!(disconnecting);
         loop {
             // Select between the next message and disconnecting
@@ -1260,8 +1263,8 @@ impl SyncClient {
                 }
             }
             ServerMessage::Ping => {
-                if let Err(e) = wrapped_client.lock().await.ping_tx.broadcast(()) {
-                    error!("Failed to broadcast {}, err: {}", util::PING_OP_NAME, e);
+                if let Err(e) = wrapped_client.lock().await.ping_tx.send(()) {
+                    error!("Failed to send {}, err: {}", util::PING_OP_NAME, e);
                 }
                 // Spawn a task to send a pong replying to the ping
                 let wrapped_client = Arc::clone(&wrapped_client);
@@ -1273,27 +1276,27 @@ impl SyncClient {
                 });
             }
             ServerMessage::Pong => {
-                if let Err(e) = wrapped_client.lock().await.pong_tx.broadcast(()) {
-                    error!("Failed to broadcast {}, err: {}", util::PONG_OP_NAME, e);
+                if let Err(e) = wrapped_client.lock().await.pong_tx.send(()) {
+                    error!("Failed to send {}, err: {}", util::PONG_OP_NAME, e);
                 }
             }
             ServerMessage::Ok => {
-                if let Err(e) = wrapped_client.lock().await.ok_tx.broadcast(()) {
-                    error!("Failed to broadcast {}, err: {}", util::OK_OP_NAME, e);
+                if let Err(e) = wrapped_client.lock().await.ok_tx.send(()) {
+                    error!("Failed to send {}, err: {}", util::OK_OP_NAME, e);
                 }
             }
             ServerMessage::Err(e) => {
                 error!("Protocol error, err: '{}'", e);
-                if let Err(e) = wrapped_client.lock().await.err_tx.broadcast(e) {
-                    error!("Failed to broadcast {}, err: {}", util::ERR_OP_NAME, e);
+                if let Err(e) = wrapped_client.lock().await.err_tx.send(e) {
+                    error!("Failed to send {}, err: {}", util::ERR_OP_NAME, e);
                 }
             }
         }
     }
 
     fn handle_info_message(&mut self, info: Info) {
-        if let Err(e) = self.info_tx.broadcast(info) {
-            error!("Failed to broadcast {}, err: {}", util::INFO_OP_NAME, e);
+        if let Err(e) = self.info_tx.send(info) {
+            error!("Failed to send {}, err: {}", util::INFO_OP_NAME, e);
         }
     }
 
@@ -1308,8 +1311,7 @@ impl SyncClient {
     }
 
     // Create a future that waits for the disconnecting state.
-    async fn disconnecting(wrapped_client: Arc<Mutex<Self>>) {
-        let mut state_stream = wrapped_client.lock().await.state_stream();
+    async fn disconnecting(mut state_stream: WatchStream<ClientState>) {
         while let Some(state) = state_stream.next().await {
             if state.is_disconnecting() {
                 break;
@@ -1427,11 +1429,11 @@ impl SyncClient {
             "Transitioned to state '{}' from '{}'",
             next_client_state, previous_client_state
         );
-        // If we can not broadcast the state transition, we could end up in an inconsistent
+        // If we can not send the state transition, we could end up in an inconsistent
         // state. This would be very bad so instead panic. This should never happen.
         self.state_tx
-            .broadcast(next_client_state)
-            .expect("to broadcast state transition");
+            .send(next_client_state)
+            .expect("to send state transition");
         result
     }
 }
@@ -1473,7 +1475,6 @@ struct Request {
 impl Request {
     async fn new(wrapped_client: Arc<Mutex<SyncClient>>) -> Result<Self> {
         let inbox_uuid = Uuid::new_v4();
-
         let client = wrapped_client.lock().await;
         let request_inbox = inbox_uuid.to_simple();
         let reply_to: Subject = format!(
@@ -1529,8 +1530,8 @@ impl Request {
 
         // Use a timeout duration if it was provided by the caller.
         let next_message = match duration {
-            Some(duration) => tokio::time::timeout(duration, rx.next()).await?,
-            None => rx.next().await,
+            Some(duration) => tokio::time::timeout(duration, rx.recv()).await?,
+            None => rx.recv().await,
         };
 
         // Make sure we clean up on error (don't leave a dangling request

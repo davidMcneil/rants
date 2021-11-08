@@ -1,5 +1,4 @@
 use env_logger;
-use futures::future::{self, Either};
 use std::{env, process::Stdio, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -74,12 +73,22 @@ impl NatsServer {
 
         // Spawn a task to run the child and wait for the kill oneshot
         let (kill_tx, kill_rx) = oneshot::channel::<()>();
-        tokio::spawn(async {
-            match future::select(child, kill_rx).await {
-                Either::Left((Ok(_exit_status), _)) => panic!("nats exited early"),
-                Either::Left((Err(_), _)) => panic!("nats produced Err while running"),
-                Either::Right((Ok(()), _)) => (),
-                Either::Right((Err(_), _)) => panic!("failed to receive ready oneshot"),
+        tokio::spawn(async move {
+            tokio::select! {
+                exit = child.wait()  => {
+                    if let Err(_) = exit {
+                        panic!("nats produced Err while running");
+                    } else {
+                        panic!("nats exited early");
+                    }
+                }
+                rx = kill_rx => {
+                    if let Err(_) = rx {
+                        panic!("failed to receive ready oneshot");
+                    } else {
+                        ();
+                    }
+                }
             }
         });
 

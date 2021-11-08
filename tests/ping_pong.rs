@@ -4,7 +4,7 @@ use common::NatsServer;
 use hostname;
 use rants::{Address, Client};
 
-#[tokio::test(threaded_scheduler)]
+#[tokio::test(flavor = "multi_thread")]
 async fn ping_pong() {
     common::init();
     let _nats_server = NatsServer::new(&["--port=5678"]).await;
